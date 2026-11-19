@@ -227,6 +227,45 @@ Both built-ins and `examples/resolvers/allowlist-resolver.ts` run the suite in
 they describe. vitest is a peer dependency of the `./testing` subpath only;
 importing `@corridor/router` alone does not pull it in.
 
+## Conformance: `describePlannerContract`
+
+A route planner turns a payment's candidate routes into the options a sender is
+shown: some offered, ranked, each with a price label; the rest dropped, each
+with the reason. `@corridor/router/testing` ships its contract the same way it
+ships the resolver's, so a planner developed outside this repo can prove it
+follows the rules:
+
+```ts
+import { describePlannerContract } from "@corridor/router/testing";
+
+describePlannerContract("MyPlanner", () => new MyPlanner(), {
+  input: myPlanInput, // must include at least one unattested candidate
+  unattestedDomains: ["not-attested.example"], // domains in `input` that must never be offered
+});
+```
+
+The suite is structural. It calls `plan(input)` and needs `{ offered, dropped }`
+back, where each offered option has a `domain` and a `label` and each dropped
+option has a `domain` and a `reason`. It does not depend on the planner's input
+type, so `input` is whatever your planner takes.
+
+Four cases:
+
+| Case                                                 | Why it is on the list                                                      |
+| ---------------------------------------------------- | -------------------------------------------------------------------------- |
+| an unattested option is never offered                | an option nobody has vouched for must not be shown as a way to pay         |
+| every dropped option carries a reason                | a route that vanishes unexplained cannot be explained or debugged          |
+| the same input yields the same order                 | no hidden weights or randomness, so a re-plan cannot reshuffle the options |
+| every label is `locked`, `indicative` or `estimated` | a fourth label is a price the sender has no wording for                    |
+
+A suite whose fixtures name no unattested domain fails the first case instead of
+passing it vacuously.
+
+`checkPlannerContract(name, makePlanner, fixtures)` returns the per-case report
+instead of registering anything, and `expectPlannerContract(report)` throws
+naming every clause that failed. `tests/planner-contract.test.ts` uses them to
+assert that the suite really does fail a planner that breaks each clause.
+
 ## Writing your own
 
 1. Create a file (any path or package you control).

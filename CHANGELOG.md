@@ -7,6 +7,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
+### Added — planner conformance kit
+
+- `@corridor/router/testing` exports `describePlannerContract`, `checkPlannerContract` and
+  `expectPlannerContract`: the planner's rules as executable cases (an unattested option is never
+  offered, every dropped option carries a reason, the same input yields the same order, every label
+  is `locked`, `indicative` or `estimated`). Documented in `docs/route-resolver.md`.
+
 ### Fixed — stale documentation and comments
 
 - Docs said no transition enters `refund_pending` and that `refunded` is reachable only when
