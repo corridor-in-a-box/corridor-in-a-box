@@ -8,13 +8,15 @@
 # That is why `dest.endpoints.endpoints_verified_at` is set below and
 # `corridor plan` reports this lane VERIFIED.
 #
-# What is NOT true: no payment has been attempted, and none should be without
-# a KYC'd business relationship with Cowrie — this repo has no such
-# relationship. Cowrie also publishes no ANCHOR_QUOTE_SERVER (no SEP-38), so
+# What is NOT true: Cowrie operates strictly on public network without a public
+# self-serve testnet sandbox; access to sandbox or production execution requires
+# an institutional partner agreement and KYB onboarding. No payment has been
+# carried out, and none can be attempted with real funds without a commercial relationship.
+# Cowrie also publishes no ANCHOR_QUOTE_SERVER (no SEP-38), so
 # `fx.quote_source` is `external`: there is no on-chain firm-quote path today,
 # only whatever off-protocol pricing Cowrie's own KYC'd integration exposes.
 id: ng-cowrie
-status_note: "REAL — Cowrie Exchange (Lagos, Nigeria), confirmed 2026-10-17. No SEP-38, no payment attempted, no business relationship in place."
+status_note: "REAL — Cowrie Exchange (Lagos, Nigeria), confirmed 2026-10-17. Sandbox evaluated: Cowrie operates on public network without public self-serve testnet sandbox; requires institutional agreement/KYB. No payment attempted with real funds."
 
 source:
   name: USD Sending Anchor

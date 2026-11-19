@@ -28,10 +28,12 @@
 # `quotes_supported: true` for USDC, so `fx.quote_source` stays `sep38` — unlike
 # the Cowrie lane, which publishes no quote server and must use `external`.
 #
-# What is NOT true: no payment has been attempted, and none should be without a
-# KYC'd business relationship with Zeam — this repo has no such relationship.
+# What is NOT true: Zeam operates on public network without a public self-serve
+# testnet or sandbox instance; testnet/sandbox payment access requires bilateral
+# partner onboarding and institutional KYB agreement. No payment has gone through it,
+# and none can be attempted with real funds without a commercial relationship.
 id: zeam
-status_note: "REAL — Zeam (mint.zeam.money), probed 2026-10-17: SEP-10/12/31/38 all answer. No payment attempted, no business relationship in place."
+status_note: "REAL — Zeam (mint.zeam.money), probed 2026-10-17: SEP-10/12/31/38 all answer. Sandbox evaluated: no public sandbox instance available; requires bilateral partner onboarding and KYB agreement. No payment attempted with real funds."
 
 source:
   name: USD Sending Anchor

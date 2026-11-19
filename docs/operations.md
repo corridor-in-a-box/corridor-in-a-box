@@ -268,6 +268,29 @@ XLM; this one settles the asset the anchor actually quotes.
 `QUOTE_UNAVAILABLE: quote HTTP 502`. `AMOUNT=1.00` reproduces it; the default of
 `10.00` does not.
 
+### `pnpm load-test` — 100 concurrent payments against the reference anchor
+
+```bash
+scripts/reference-anchor.sh up
+scripts/reference-anchor.sh payout-watch &
+CORRIDOR_SIGNER_SECRET=S… pnpm load-test
+```
+
+Sends 100 testnet payments concurrently (`Promise.all`) through the complete corridor
+lifecycle (SEP-12 customer identification, SEP-38 quotation, SEP-31 transfer creation,
+Stellar settlement under the per-signer sequence lock, and status reconciliation).
+
+Validates:
+
+- **Zero duplicate settlements**: asserts that all settled transactions yield unique on-chain
+  hashes with no double-spending.
+- **Latency profiling**: records min, max, average, and p50/p90/p95/p99 execution durations.
+- **Job summary output**: generates a formatted Markdown report automatically appended to
+  `$GITHUB_STEP_SUMMARY` in CI or output to stdout.
+
+The manual workflow `.github/workflows/load-test.yml` executes this test on demand
+(`workflow_dispatch` only; never scheduled) using a dedicated testnet distribution account.
+
 ### `corridor canary --write` — recording the proof it earns
 
 ```bash

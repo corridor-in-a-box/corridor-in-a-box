@@ -232,7 +232,7 @@
   },
   {
     "id": "ng-cowrie",
-    "status_note": "REAL — Cowrie Exchange (Lagos, Nigeria), confirmed 2026-10-17. No SEP-38, no payment attempted, no business relationship in place.",
+    "status_note": "REAL — Cowrie Exchange (Lagos, Nigeria), confirmed 2026-10-17. Sandbox evaluated: Cowrie operates on public network without public self-serve testnet sandbox; requires institutional agreement/KYB. No payment attempted with real funds.",
     "source": {
       "name": "USD Sending Anchor",
       "asset": "USDC",
@@ -351,7 +351,7 @@
   },
   {
     "id": "zeam",
-    "status_note": "REAL — Zeam (mint.zeam.money), probed 2026-10-17: SEP-10/12/31/38 all answer. No payment attempted, no business relationship in place.",
+    "status_note": "REAL — Zeam (mint.zeam.money), probed 2026-10-17: SEP-10/12/31/38 all answer. Sandbox evaluated: no public sandbox instance available; requires bilateral partner onboarding and KYB agreement. No payment attempted with real funds.",
     "source": {
       "name": "USD Sending Anchor",
       "asset": "USDC",
