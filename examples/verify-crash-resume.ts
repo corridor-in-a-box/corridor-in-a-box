@@ -113,7 +113,7 @@ const note = (step: string, detail: string): void => {
 function writeSummary(outcome: string): void {
   const path = process.env.GITHUB_STEP_SUMMARY;
   if (!path) return;
-  const rows = summary.map(([k, v]) => `| ${k} | ${v.replace(/\|/g, "\\|")} |`).join("\n");
+  const rows = summary.map(([k, v]) => `| ${k} | ${v.replace(/[\\|]/g, "\\$&")} |`).join("\n");
   appendFileSync(
     path,
     `### Live crash-resume: ${outcome}\n\n| Step | Result |\n| --- | --- |\n${rows}\n\n`,
@@ -266,7 +266,10 @@ async function run(): Promise<void> {
   }
   const quotable = await assertAssetQuotable(corridor, ANCHOR);
   if (!quotable.ok) {
-    throw new Failure(quotable.error, quotable.refused ? EXIT_REFUSED : EXIT_STACK_UNFIT);
+    throw new Failure(
+      quotable.error ?? "the anchor does not quote the bridge asset",
+      quotable.refused ? EXIT_REFUSED : EXIT_STACK_UNFIT,
+    );
   }
 
   // The service serves every manifest in its corridors dir. Hand it only this
