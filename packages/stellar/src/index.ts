@@ -2091,3 +2091,9 @@ export function destinationCheck(
 }
 
 export { tomlHashCheck, type TomlHashCheckOptions } from "./toml-hash-check";
+export {
+  checkWalletRecipientTrustline,
+  type CheckWalletTrustlineOptions,
+  type WalletTrustlineCheckResult,
+  type WalletTrustlineRefusalCode,
+} from "./wallet-route";
