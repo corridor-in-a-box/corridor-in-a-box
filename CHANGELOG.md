@@ -7,6 +7,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
+### Added — rate outlier sample detection, African anchor expansion, and probe findings ([#602](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/602), [#660](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/660), [#661](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/661), [#664](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/664))
+
+- Added outlier detection and estimation exclusion in `@corridor/router` (#602): flags price samples deviating beyond a configurable threshold (default 10%) from the recent median, excluding outliers from P25 estimation while preserving them in historical audits.
+- Re-probed and documented findings for Flutterwave (`flutterwave.com`) (#660) and Bitso (`bitso.com`) (#661) in `contracts/anchors.json`.
+- Added five African anchors to the fleet in `contracts/anchors.json` (#664): Yellow Card (`yellowcard.io`), Paychant (`paychant.com`), Fonbnk (`fonbnk.com`), HoneyCoin (`honeycoin.app`), and Kotani Pay (`kotanipay.com`).
+
 ### Fixed — stale documentation and comments
 
 - Docs said no transition enters `refund_pending` and that `refunded` is reachable only when

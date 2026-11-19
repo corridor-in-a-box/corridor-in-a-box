@@ -88,14 +88,30 @@
     "",
     "flutterwave.com is Flutterwave (Nigeria/Africa payments provider). Not listed",
     "in anchors.stellar.org (https://anchors.stellar.org/?search=Flutterwave).",
-    "Probed 2026-10-19: toml_fetch returns HTTP 404 (https://flutterwave.com/.well-known/stellar.toml).",
+    "Probed 2026-10-19 and re-probed 2026-11-19: pnpm probe:anchor flutterwave.com fails",
+    "at toml_fetch with HTTP 404 (https://flutterwave.com/.well-known/stellar.toml returned 404).",
     "Flutterwave publishes no Stellar anchor or SEP-31 receive endpoint; no manifest is written.",
     "",
     "bitso.com is Bitso (Argentina, Brazil, Colombia, Mexico; sourced from",
     "https://anchors.stellar.org/?search=Bitso, where the entry claims SEP-31 and",
-    "website https://bitso.com/ with toml_file null). Probed 2026-10-22: toml_fetch",
-    "returns HTTP 404 (https://bitso.com/.well-known/stellar.toml), so no SEP-31",
-    "receive capability was verified and no corridor manifest was written.",
+    "website https://bitso.com/ with toml_file null). Probed 2026-10-22 and re-probed",
+    "2026-11-19: pnpm probe:anchor bitso.com fails at toml_fetch with fetch failed",
+    "(getaddrinfo ENOTFOUND bitso.com / DNS resolution failure for https://bitso.com/.well-known/stellar.toml).",
+    "No stellar.toml is available, no advertised SEPs can be verified, and no SEP-31 receive",
+    "capability is verified; no corridor manifest is written.",
+    "",
+    "African anchor expansion (#664): five anchors operating in Africa were identified",
+    "from the Stellar Anchor Directory and official ecosystem sources and added to the fleet on 2026-11-19.",
+    "yellowcard.io (Yellow Card; Nigeria, Ghana, Kenya, South Africa; https://anchors.stellar.org/?search=Yellow+Card):",
+    "probed 2026-11-19, toml_fetch returned HTTP 404; no SEPs advertised.",
+    "paychant.com (Paychant; Ghana, Kenya, Nigeria, Uganda, Zambia; https://anchors.stellar.org/?search=Paychant):",
+    "probed 2026-11-19, toml_fetch returned HTTP 404; no SEPs advertised.",
+    "fonbnk.com (Fonbnk; Kenya, Nigeria, South Africa; https://anchors.stellar.org): probed 2026-11-19,",
+    "toml_fetch returned HTTP 404; no SEPs advertised.",
+    "honeycoin.app (HoneyCoin; Kenya, Nigeria, Ghana; https://honeycoin.app): probed 2026-11-19,",
+    "toml_fetch returned HTTP 404; no SEPs advertised.",
+    "kotanipay.com (Kotani Pay; Kenya, Ghana, Rwanda; https://kotanipay.com): probed 2026-11-19,",
+    "toml_fetch returned HTTP 404; no SEPs advertised.",
     "",
     "Each entry in `anchors` records curator-declared context (name, ISO 3166-1",
     "alpha-2 countries, kind, directory/manifest source, and date added). Countries",
@@ -121,7 +137,12 @@
     "arf.one",
     "stellar-sep-24.banxa.com",
     "flutterwave.com",
-    "bitso.com"
+    "bitso.com",
+    "yellowcard.io",
+    "paychant.com",
+    "fonbnk.com",
+    "honeycoin.app",
+    "kotanipay.com"
   ],
   "anchors": [
     {
@@ -275,6 +296,46 @@
       "kind": "other",
       "source": "https://anchors.stellar.org/?search=Bitso",
       "added": "2026-10-22"
+    },
+    {
+      "domain": "yellowcard.io",
+      "name": "Yellow Card",
+      "countries": ["NG", "GH", "KE", "ZA"],
+      "kind": "offramp",
+      "source": "https://anchors.stellar.org/?search=Yellow+Card",
+      "added": "2026-11-19"
+    },
+    {
+      "domain": "paychant.com",
+      "name": "Paychant",
+      "countries": ["GH", "KE", "NG", "UG", "ZM"],
+      "kind": "offramp",
+      "source": "https://anchors.stellar.org/?search=Paychant",
+      "added": "2026-11-19"
+    },
+    {
+      "domain": "fonbnk.com",
+      "name": "Fonbnk",
+      "countries": ["KE", "NG", "ZA"],
+      "kind": "other",
+      "source": "https://anchors.stellar.org",
+      "added": "2026-11-19"
+    },
+    {
+      "domain": "honeycoin.app",
+      "name": "HoneyCoin",
+      "countries": ["KE", "NG", "GH"],
+      "kind": "other",
+      "source": "https://honeycoin.app",
+      "added": "2026-11-19"
+    },
+    {
+      "domain": "kotanipay.com",
+      "name": "Kotani Pay",
+      "countries": ["KE", "GH", "RW"],
+      "kind": "offramp",
+      "source": "https://kotanipay.com",
+      "added": "2026-11-19"
     }
   ]
 }

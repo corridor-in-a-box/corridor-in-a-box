@@ -98,3 +98,22 @@ export {
 
 export { createAdapterRegistry } from "./adapters";
 export type { AdapterFactory, AdapterRegistry } from "./adapters";
+
+export {
+  RateSampleCollector,
+  computeDailySummary,
+  assertNetworkIsolation,
+  formatUtcDate,
+  calculateMedian,
+  isRateOutlier,
+  computePercentile,
+  computeP25,
+  flagOutliers,
+  DEFAULT_OUTLIER_THRESHOLD,
+  DEFAULT_OUTLIER_WINDOW_SIZE,
+  type RateNetwork,
+  type RateSource,
+  type RateSample,
+  type DailyRateSummary,
+  type OutlierOptions,
+} from "./rate-history";
