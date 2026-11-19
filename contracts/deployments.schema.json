@@ -104,7 +104,11 @@
               }
             ]
           },
-          "then": { "required": ["deployedAt"] }
+          "then": {
+            "type": "object",
+            "properties": { "deployedAt": { "type": "string" } },
+            "required": ["deployedAt"]
+          }
         },
         {
           "description": "A network with no deployed contract has no upgrades to record.",
@@ -113,6 +117,7 @@
             "properties": { "registry": { "type": "null" }, "attester": { "type": "null" } }
           },
           "then": {
+            "type": "object",
             "properties": { "upgrades": { "type": "array", "maxItems": 0 } }
           }
         }
