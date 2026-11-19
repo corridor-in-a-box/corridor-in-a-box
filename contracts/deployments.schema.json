@@ -92,8 +92,16 @@
           "description": "A network with a deployed contract records when it was deployed.",
           "if": {
             "anyOf": [
-              { "properties": { "registry": { "type": "string" } }, "required": ["registry"] },
-              { "properties": { "attester": { "type": "string" } }, "required": ["attester"] }
+              {
+                "type": "object",
+                "properties": { "registry": { "type": "string" } },
+                "required": ["registry"]
+              },
+              {
+                "type": "object",
+                "properties": { "attester": { "type": "string" } },
+                "required": ["attester"]
+              }
             ]
           },
           "then": { "required": ["deployedAt"] }
@@ -101,10 +109,11 @@
         {
           "description": "A network with no deployed contract has no upgrades to record.",
           "if": {
+            "type": "object",
             "properties": { "registry": { "type": "null" }, "attester": { "type": "null" } }
           },
           "then": {
-            "properties": { "upgrades": { "maxItems": 0 } }
+            "properties": { "upgrades": { "type": "array", "maxItems": 0 } }
           }
         }
       ]
