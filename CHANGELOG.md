@@ -7,6 +7,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
+### Added — onboarding guide, non-engineer glossary, and smart router price label docs ([#642](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/642), [#705](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/705), [#706](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/706))
+
+- Added `docs/onboarding.md` (#642): guide for sending businesses detailing receiver KYB checks, company profile and customer data collection (SEP-12), exporter technical integration, lane pre-flight verification, and legal/licensing boundaries.
+- Added `docs/glossary.md` (#706): plain, one-sentence definitions of key terms for non-engineers; linked from the README and integrated into the web docs sidebar.
+- Added plain-language routing and price labels documentation to `README.md` (#705), explaining route planning and the three price labels (`locked`, `indicative`, `estimated`).
+
+### Changed — ClickPesa probe findings documented ([#652](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/652))
+
+- Re-probed `connect.clickpesa.com` (#652): recorded dated findings in `contracts/anchors.json` confirming `toml_fetch` fails due to DNS resolution failure (`getaddrinfo ENOTFOUND connect.clickpesa.com`).
+
 ### Fixed — stale documentation and comments
 
 - Docs said no transition enters `refund_pending` and that `refunded` is reachable only when
