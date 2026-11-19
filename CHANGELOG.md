@@ -7,6 +7,41 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
+### Added — send app page scaffold with permanent testnet banner ([#684](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/684))
+
+- Reference send app route `/send` in the web application (`web/app/send/layout.tsx` and
+  `web/app/send/page.tsx`) with a permanent, non-dismissible testnet banner (`web/components/send/TestnetBanner.tsx`)
+  asserting that the application exercises `@corridor/service` on Stellar Testnet and that no
+  real money is moved. Responsive down to 375px width without horizontal scroll, linked from top
+  navigation (`web/components/layout/Navbar.tsx`), with unit tests in `tests/web-send-scaffold.test.ts`.
+
+### Added — concurrent load test against reference anchor ([#681](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/681))
+
+- Manual load testing runner `examples/load-test.ts` (`pnpm load-test`) sending 100 concurrent
+  payments against the reference anchor stack, measuring min/max/average/percentile latencies,
+  asserting zero duplicate settlements, and writing a formatted summary report to `$GITHUB_STEP_SUMMARY`.
+- Workflow `.github/workflows/load-test.yml` configured strictly for manual execution
+  (`workflow_dispatch` only; never scheduled) using a funded testnet distribution account.
+  Documented in `docs/operations.md` and validated in `tests/load-test.test.ts`.
+
+### Changed — Cowrie & Zeam sandbox payment outcome documented ([#683](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/683), [#682](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/682))
+
+- Evaluated sandbox payment feasibility for Cowrie (`corridors/ng-cowrie.corridor.yaml`) and Zeam
+  (`corridors/zeam.corridor.yaml`): both anchors operate on public network and require institutional
+  onboarding / bilateral partner agreements before sandbox access or payment execution is granted.
+  Documented outcomes in respective corridor status notes and regenerated corridor catalog and web data.
+
+### Changed — anchor probe findings documented for Anclap, Coins.ph, BlindPay, and MyKobo ([#654](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/654), [#653](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/653), [#651](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/651), [#650](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/650))
+
+- Probed `anclap.com.ar` (#654) and `coins.ph` (#653): both fail `toml_fetch` due to DNS resolution
+  failures (`getaddrinfo ENOTFOUND`), confirming neither serves an active `stellar.toml` or SEP-31 receive endpoint.
+- Probed `blindpay.com` (#651): fails `toml_fetch` with HTTP 403 Forbidden due to Cloudflare edge restrictions,
+  leaving `stellar.toml` inaccessible and receive capabilities unverified.
+- Investigated `mykobo.co` (#650): `toml_fetch` succeeds and advertises SEP-31 (`DIRECT_PAYMENT_SERVER`),
+  but `sep31_info` fails because the published endpoint hostname `stellar.mykobo.co` does not resolve in DNS (`ENOTFOUND`).
+  Verified that the probe conforms to SEP-31 (which requires no auth on `GET /sep31/info`) and documented the upstream outage.
+- Recorded dated findings in `contracts/anchors.json` and added regression tests in `tests/probe-anchor-findings.test.ts`.
+
 ### Fixed — stale documentation and comments
 
 - Docs said no transition enters `refund_pending` and that `refunded` is reachable only when
