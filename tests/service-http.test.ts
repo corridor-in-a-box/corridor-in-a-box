@@ -191,6 +191,56 @@ describe("service over HTTP: the happy path", () => {
     expect(JSON.parse(res.body)).toEqual({ status: "ok" });
   });
 
+  it("serves /readyz with 200 when all readiness checks pass", async () => {
+    const { port } = await serve({
+      readinessChecks: [
+        { name: "db", check: async () => {} },
+        { name: "rpc", check: async () => {} },
+      ],
+    });
+    const res = await call(port, "GET", "/readyz");
+    expect(res.status).toBe(200);
+    const parsed = JSON.parse(res.body);
+    expect(parsed.status).toBe("ok");
+    expect(parsed.checks).toEqual([
+      { name: "db", ok: true },
+      { name: "rpc", ok: true },
+    ]);
+  });
+
+  it("serves /readyz with 503 when any readiness check fails", async () => {
+    const { port } = await serve({
+      readinessChecks: [
+        { name: "db", check: async () => {} },
+        {
+          name: "store",
+          check: async () => {
+            throw new Error("db connection refused");
+          },
+        },
+      ],
+    });
+    const res = await call(port, "GET", "/readyz");
+    expect(res.status).toBe(503);
+    const parsed = JSON.parse(res.body);
+    expect(parsed.status).toBe("degraded");
+    expect(parsed.checks).toEqual([
+      { name: "db", ok: true },
+      { name: "store", ok: false },
+    ]);
+    // Verifies that internal error messages are never leaked in response body
+    expect(res.body).not.toContain("db connection refused");
+  });
+
+  it("serves /readyz with 503 when draining", async () => {
+    const { port, svc } = await serve();
+    void svc.drain();
+    const res = await call(port, "GET", "/readyz");
+    expect(res.status).toBe(503);
+    const parsed = JSON.parse(res.body);
+    expect(parsed.status).toBe("draining");
+  });
+
   it("exposes /metrics as Prometheus text, not JSON, and unmetered", async () => {
     // capacity 0 would 429 anything metered, so this also proves the scrape
     // path stays open for a monitor that has no API key.

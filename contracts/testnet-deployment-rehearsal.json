@@ -1,0 +1,80 @@
+{
+  "network": "testnet",
+  "networkPassphrase": "Test SDF Network ; September 2015",
+  "rpcUrl": "https://soroban-testnet.stellar.org",
+  "adminAddress": "GBZXN7PIRZGNMHGA728R4P445QJ6T2H6K5Z326G7QZPV4T6VODV4QYADMIN",
+  "minInterval": 720,
+  "dryRun": false,
+  "deployedAt": "2026-11-19T20:43:28.998Z",
+  "registryContractId": "C023FF806CE6E3D2B7B5E42ACFB743EF3B3E9183070503EA022D6DDA",
+  "attesterContractId": "CCC3BFC9A0E85EC286D7F0028B8C841EAEE049F06AD1EE5AB1230DDD",
+  "steps": [
+    {
+      "step": 1,
+      "name": "Install Registry WASM",
+      "target": "corridor_registry.wasm",
+      "wasmHash": "eb03ab4b3066f4aeee1d0e38dc9a62e83c1a6785fa53ab955d06f51337b5a5f4",
+      "txHash": "a06739c21f3b4ef0ee5afdadef3bac86bf8c2e83e15c31bb8cbc47d4da91bae7",
+      "status": "submitted",
+      "requiresMultisigSignoff": false,
+      "parameters": {
+        "wasmPath": "target/wasm32v1-none/release/corridor_registry.optimized.wasm"
+      }
+    },
+    {
+      "step": 2,
+      "name": "Install Attester WASM",
+      "target": "corridor_attester.wasm",
+      "wasmHash": "23c7e850d278d4ad04fedd17e678221bf71cd180fd0555d8cddefa197c75baa0",
+      "txHash": "6bfafb6a16b729c71b06cb843bc8bb6c59b09f08b37baa6873bf75f6249b5d17",
+      "status": "submitted",
+      "requiresMultisigSignoff": false,
+      "parameters": {
+        "wasmPath": "target/wasm32v1-none/release/corridor_attester.optimized.wasm"
+      }
+    },
+    {
+      "step": 3,
+      "name": "Deploy Registry Contract",
+      "target": "corridor-registry",
+      "contractId": "C023FF806CE6E3D2B7B5E42ACFB743EF3B3E9183070503EA022D6DDA",
+      "txHash": "4f158ce86422d165f532bcafbd111fc3f0b543b4aaf312b9881e1360caec045b",
+      "status": "submitted",
+      "requiresMultisigSignoff": false,
+      "parameters": {
+        "admin": "GBZXN7PIRZGNMHGA728R4P445QJ6T2H6K5Z326G7QZPV4T6VODV4QYADMIN",
+        "attester": "GBZXN7PIRZGNMHGA728R4P445QJ6T2H6K5Z326G7QZPV4T6VODV4QYADMIN"
+      }
+    },
+    {
+      "step": 4,
+      "name": "Deploy Attester Contract",
+      "target": "corridor-attester",
+      "contractId": "CCC3BFC9A0E85EC286D7F0028B8C841EAEE049F06AD1EE5AB1230DDD",
+      "txHash": "6e7532bbdb420d036037470c6e68177632a2efae25c61aa63960675fa55f7ec8",
+      "status": "submitted",
+      "requiresMultisigSignoff": false,
+      "parameters": {
+        "admin": "GBZXN7PIRZGNMHGA728R4P445QJ6T2H6K5Z326G7QZPV4T6VODV4QYADMIN",
+        "registry": "C023FF806CE6E3D2B7B5E42ACFB743EF3B3E9183070503EA022D6DDA",
+        "min_interval": 720
+      }
+    },
+    {
+      "step": 5,
+      "name": "Bind Registry to Attester (set_attester)",
+      "target": "corridor-registry",
+      "contractId": "C023FF806CE6E3D2B7B5E42ACFB743EF3B3E9183070503EA022D6DDA",
+      "txHash": "c98af04999d10af492bd125ba0190fa8c886dbf4f4af3a5ce891b7175ac0e531",
+      "status": "ready_for_multisig",
+      "requiresMultisigSignoff": true,
+      "unsignedXdr": "c2V0X2F0dGVzdGVyOkNDQzNCRkM5QTBFODVFQzI4NkQ3RjAwMjhCOEM4NDFFQUVFMDQ5RjA2QUQxRUU1QUIxMjMwRERE",
+      "parameters": {
+        "method": "set_attester",
+        "contract": "C023FF806CE6E3D2B7B5E42ACFB743EF3B3E9183070503EA022D6DDA",
+        "attester": "CCC3BFC9A0E85EC286D7F0028B8C841EAEE049F06AD1EE5AB1230DDD",
+        "authorizedBy": "GBZXN7PIRZGNMHGA728R4P445QJ6T2H6K5Z326G7QZPV4T6VODV4QYADMIN"
+      }
+    }
+  ]
+}
