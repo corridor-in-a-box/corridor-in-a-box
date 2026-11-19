@@ -7,6 +7,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
+### Added — error screens for the testnet send app ([#691](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/691))
+
+- `web/components/SendErrorState.tsx` renders a screen for each way a payment cannot go ahead: no routes,
+  every route dropped (listing each route and its reason), the locked price expired, and the payment failed.
+- `web/lib/send-errors.ts` holds the wording. A failed payment is worded from its error code alone, so
+  anchor URLs and upstream response bodies in the raw message are never shown.
+- `tests/web-send-errors.test.ts` covers each state.
+
 ### Fixed — stale documentation and comments
 
 - Docs said no transition enters `refund_pending` and that `refunded` is reachable only when
