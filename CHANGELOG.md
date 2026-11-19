@@ -7,6 +7,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
+### Changed — anchor probe findings documented for Arf, OwlPay, Lightnet, and Mercuryo ([#658](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/658), [#657](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/657), [#656](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/656), [#655](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/655))
+
+- Probed `arf.one` (#658), `owlting.com` (#657), `lightnet.io` (#656), and `mercuryo.io` (#655): all four
+  anchors fail `toml_fetch` with HTTP 404 Not Found (`/.well-known/stellar.toml` not found).
+- Confirmed that none of the four anchors hosts an active `stellar.toml`, advertises SEPs, or serves
+  a SEP-31 receive endpoint.
+- Recorded dated technical findings in `contracts/anchors.json` and added regression tests in `tests/probe-anchor-apac-findings.test.ts`.
+
 ### Fixed — stale documentation and comments
 
 - Docs said no transition enters `refund_pending` and that `refunded` is reachable only when
