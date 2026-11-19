@@ -7,6 +7,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
+### Added — lane check cache, wallet route trustline pre-checks, mainnet rate collector, and Banxa probe findings ([#633](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/633), [#648](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/648), [#659](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/659), [#702](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/702))
+
+- Added `LaneCheckCache` in `@corridor/router` (#633): caches lane results per receiver domain for 24 hours and refreshes in the background upon expiry, reducing pre-settle latency and anchor load.
+- Added `checkWalletRecipientTrustline` in `@corridor/stellar` (#648): verifies recipient accounts exist on-chain and hold authorized trustlines before sending, refusing non-compliant wallet destinations.
+- Added `RateSampleCollector` and `computeDailySummary` in `@corridor/router` (#702): collects mainnet (`network = public`) and testnet indicative prices with strict network isolation, ensuring samples from different networks are never mixed.
+- Documented probe findings for Banxa (`stellar-sep-24.banxa.com`) in `contracts/anchors.json` (#659): `pnpm probe:anchor stellar-sep-24.banxa.com` fails at `toml_fetch` with HTTP 403 Forbidden due to Cloudflare edge protection.
+
 ### Fixed — stale documentation and comments
 
 - Docs said no transition enters `refund_pending` and that `refunded` is reachable only when

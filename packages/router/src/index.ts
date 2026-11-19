@@ -98,3 +98,22 @@ export {
 
 export { createAdapterRegistry } from "./adapters";
 export type { AdapterFactory, AdapterRegistry } from "./adapters";
+
+export {
+  LaneCheckCache,
+  DEFAULT_LANE_CACHE_TTL_MS,
+  type LaneCheckResult,
+  type LaneCheckerFn,
+  type LaneCacheOptions,
+} from "./lane-cache";
+
+export {
+  RateSampleCollector,
+  computeDailySummary,
+  assertNetworkIsolation,
+  formatUtcDate,
+  type RateNetwork,
+  type RateSource,
+  type RateSample,
+  type DailyRateSummary,
+} from "./rate-history";
