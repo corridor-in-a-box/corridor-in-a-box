@@ -668,6 +668,8 @@ The repo's `Dockerfile` builds the service image: Node 22, non-root (`USER node`
 root-owned and read-only. It runs `examples/run-service.ts`, so the env contract is the
 one in that file's header.
 
+For comprehensive always-on deployment procedures, secret custody, and `/readyz` health monitoring, see the [Always-On Testnet Host Deployment Guide](./testnet-host-deployment.md).
+
 ```bash
 docker build -t corridor-service .
 docker run --rm -p 8080:8080 \
