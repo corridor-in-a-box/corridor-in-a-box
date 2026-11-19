@@ -92,7 +92,7 @@ corridors/       the manifests — ALL corridor-specifics live here,
 contracts/       Soroban registry + attester contracts
 scripts/         reference-anchor.sh, assert-testnet-corridor.ts, the
                  corridor catalog, adapter scaffold and release checks
-docs/            threat model, key management, bespoke adapters,
+docs/            threat model, key management, onboarding, glossary, bespoke adapters,
                  "why not Anchor Platform", SEP coverage, operations, …
 examples/        runnable end-to-end demos, the service launcher and a
                  scriptable mock anchor (`pnpm mock:anchor`)
@@ -114,6 +114,18 @@ Three boundaries do the work:
    health-/rate-weighted resolver could be supplied separately; it is not
    included or injected by this repo. The interface is the seam for that
    possible future component.
+
+## Routing and Price Labels
+
+When a sender wants to move funds, route planning evaluates candidate corridors and presents available options. A planner checks that destination anchors are active, standards-compliant, and backed by fresh on-chain attestations, dropping options that cannot be verified.
+
+Every route option carries a plain **price label** indicating how its exchange rate was determined:
+
+- **`locked`**: A firm price backed by an anchor's SEP-38 firm quote (`POST /quote`). It is guaranteed for a fixed time window (`expiresAt`). This is the only price that is guaranteed before payment execution.
+- **`indicative`**: A prevailing market price queried from an anchor's live price feed (SEP-38 `GET /price`) when the anchor does not offer firm quotes. It reflects current market conditions, but the final received amount may adjust if market rates move before settlement.
+- **`estimated`**: A fallback price projection calculated from historical corridor rate data when an anchor provides neither a firm quote nor a live `/price` endpoint.
+
+For details on the resolver interface and planner conformance, see [docs/route-resolver.md](./docs/route-resolver.md). For business onboarding and legal responsibilities, see [docs/onboarding.md](./docs/onboarding.md). For plain-language definitions of all terminology, see the [Glossary](./docs/glossary.md).
 
 ## Corridor sequencing
 

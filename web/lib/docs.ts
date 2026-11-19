@@ -269,6 +269,93 @@ this engine talks to it.
 | Idempotency / recovery | N/A | Core |
 `,
   },
+  {
+    slug: "onboarding",
+    title: "Onboarding guide",
+    description: "Onboarding guide for sending businesses, receiver checks, and compliance responsibilities.",
+    body: `# Onboarding Guide for Sending Businesses
+
+This document explains how sending businesses onboard with receiving anchors, how lane readiness is verified, and where legal responsibilities lie.
+
+## Role of corridor-in-a-box
+
+\`corridor-in-a-box\` is an open-source technical orchestration engine for cross-border payment corridors over Stellar. It coordinates the five canonical payment verbs across standards-compliant anchors:
+
+\`quote → comply → settle → reconcile → recover\`
+
+The software is not a bank, custodian, or money transmitter. It does not hold funds, provide liquidity, or provide legal authorization to transfer funds.
+
+## What a Receiver Checks
+
+Receiving anchors are licensed financial institutions or money service businesses in destination jurisdictions. When establishing a commercial lane, a receiving anchor typically evaluates:
+
+1. **Entity Verification & KYB**: Certificate of incorporation, registered address, good standing, and identification of Ultimate Beneficial Owners (UBOs).
+2. **AML/CFT Controls**: Sanctions screening policies, source-of-funds verification, and transaction monitoring controls.
+3. **Corridor Profile & Projected Volumes**: Expected payment volumes, currencies, and destination payout channels.
+
+## The Company Profile and Customer Data (SEP-12)
+
+Sending businesses provide customer compliance details to destination anchors using Stellar's **SEP-12** specification. In SEP-31 cross-border corridors:
+
+- **Sender Profile (\`sep31-sender\`)**: Legal company name, registration number, registered jurisdiction, tax ID, and authorized representative details.
+- **Receiver Profile (\`sep31-receiver\`)**: Recipient legal name, destination bank/sort code, account number or mobile money wallet identifier.
+
+## Lane Checks & Pre-Flight Verification
+
+Before routing production volume, sending businesses verify lane health:
+
+1. **Structural Manifest Validation**: Run \`corridor plan <corridor.yaml>\` to inspect the execution pipeline and verify destination endpoints.
+2. **On-Chain Attestation**: Verify fresh attestations on the Soroban registry using \`pnpm registry:read\`.
+3. **Pre-Settle Safety Gate**: Automated safety checks verify that the anchor accepted the transfer before funds move on chain.
+4. **Circuit Breakers**: Consecutive failures trigger the health store breaker (\`CORRIDOR_HALTED\`), halting traffic during anchor outages.
+
+## Legal and Regulatory Responsibility
+
+The sending business remains strictly responsible for holding required money transmitter licenses, providing statutory consumer disclosures, performing sanctions/AML screenings, executing bilateral commercial contracts with receivers, and managing settlement risk.
+`,
+  },
+  {
+    slug: "glossary",
+    title: "Glossary",
+    description: "Plain, one-sentence definitions of key terms for non-engineers.",
+    body: `# Glossary
+
+Plain, one-sentence definitions of key terms used across \`corridor-in-a-box\` and Stellar cross-border payments.
+
+## Core Concepts
+
+- **Anchor**: A licensed financial entity or gateway that bridges off-chain banking systems and the on-chain Stellar network.
+- **Corridor (or Lane)**: A configured payment route between a source currency/jurisdiction and a destination currency/jurisdiction operated by specific anchors.
+- **Manifest**: A YAML file defining a corridor's endpoints, assets, compliance methods, and settlement rules without requiring code changes.
+- **Bridge Asset**: An on-chain digital currency (such as USDC) used as an intermediate settlement asset between the sending anchor and receiving anchor.
+- **Settle Leg**: The native Stellar transaction that transfers the bridge asset from the sender's account to the receiving anchor's deposit address.
+- **Reconciliation**: The automated process where the engine polls the receiving anchor until the final fiat payout is confirmed completed.
+- **Idempotency**: A safety guarantee ensuring that retrying a payment request with the same idempotency key never creates duplicate payouts or double spends.
+- **Circuit Breaker**: An automated safety mechanism that halts new payments on a failing corridor after consecutive anchor errors.
+- **Registry**: An on-chain Soroban contract that stores tamper-evident, verifiable conformance facts and probe history for anchors.
+- **Attestation**: A signed, timestamped record on the Soroban registry proving that an anchor was tested and verified against Stellar standards.
+
+## Standards & Protocols
+
+- **SEP (Stellar Ecosystem Proposal)**: A public, community-governed technical standard specifying interoperability rules on Stellar.
+- **SEP-1**: The standard defining \`stellar.toml\`, a discovery file hosted at \`/.well-known/stellar.toml\` describing an anchor's published capabilities and endpoints.
+- **SEP-6**: A protocol for deposit and withdrawal where an anchor handles asset transfers directly through programmatic API requests.
+- **SEP-10**: A cryptographic challenge-response authentication standard using Stellar keypairs to issue JSON Web Tokens (JWTs) for API access.
+- **SEP-12**: A standardized KYC protocol allowing anchors to collect customer identification and compliance data programmatically.
+- **SEP-24**: An interactive deposit and withdrawal standard where an anchor presents a hosted web view to the user for compliance and payout details.
+- **SEP-31**: The cross-border remittance protocol enabling direct, business-to-business payments between sending and receiving financial institutions.
+- **SEP-38**: The Anchor RFQ (Request for Quote) standard for querying indicative prices and locking firm exchange rates between assets.
+
+## Routing & Quotation
+
+- **RouteResolver**: The pluggable routing interface that selects the appropriate destination anchor and execution parameters for a payment intent.
+- **RoutePlanner**: The component that evaluates available corridors, filters out inactive or non-compliant options, and presents ranked choices.
+- **Locked Price**: A guaranteed exchange rate backed by a firm SEP-38 quote with a fixed expiration window (\`expiresAt\`).
+- **Indicative Price**: A prevailing market exchange rate queried from an anchor's live price feed when a firm guaranteed quote is unavailable.
+- **Estimated Price**: A fallback price projection calculated from historical rates when an anchor publishes neither firm quotes nor a live price feed.
+- **Pre-Settle Gate**: A mandatory verification check performed immediately before broadcasting on-chain funds to confirm anchor acceptance.
+`,
+  },
 ];
 
 export function getDoc(slug: string): Doc | undefined {
