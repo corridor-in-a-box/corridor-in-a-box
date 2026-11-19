@@ -456,19 +456,41 @@ doctor() {
 payout_watch() {
   require_podman
   local seen=" " id
-  log "payout-watch: paying out pending_receiver SEP-31 transactions via $REF_URL (every ${PAYOUT_POLL_SECS}s)"
+  local action="${1:-${PAYOUT_ACTION:-process}}"
+  log "payout-watch: watching pending_receiver SEP-31 transactions via $REF_URL (action: $action, every ${PAYOUT_POLL_SECS}s)"
   while :; do
     for id in $(psql_platform -c "SELECT id FROM sep31_transaction WHERE status = 'pending_receiver';" 2>/dev/null || true); do
       case "$seen" in *" $id "*) continue ;; esac
-      if curl -fsS --max-time 10 -X POST "$REF_URL/sep31/transactions/$id/process" >/dev/null 2>&1; then
+      if [ "$action" = "refund" ]; then
+        psql_platform -c "UPDATE sep31_transaction SET status = 'refunded' WHERE id = '$id';" >/dev/null 2>&1 || true
         seen="$seen$id "
-        log "payout-watch: payout triggered for $id"
+        log "payout-watch: marked transaction $id as refunded"
       else
-        log "payout-watch: $REF_URL refused payout for $id; retrying"
+        if curl -fsS --max-time 10 -X POST "$REF_URL/sep31/transactions/$id/process" >/dev/null 2>&1; then
+          seen="$seen$id "
+          log "payout-watch: payout triggered for $id"
+        else
+          log "payout-watch: $REF_URL refused payout for $id; retrying"
+        fi
       fi
     done
     sleep "$PAYOUT_POLL_SECS"
   done
+}
+
+stop_anchor() {
+  require_podman
+  log "stopping reference anchor container (ap-sep)..."
+  podman stop ap-sep >/dev/null 2>&1 || true
+  log "anchor stopped"
+}
+
+start_anchor() {
+  require_podman
+  log "starting reference anchor container (ap-sep)..."
+  podman start ap-sep >/dev/null 2>&1 || true
+  wait_for 'curl -fsS --max-time 2 "$SEP_URL/sep31/info" >/dev/null 2>&1' 60 "anchor restart"
+  log "anchor restarted and healthy"
 }
 
 down() {
@@ -485,6 +507,8 @@ case "${1:-up}" in
   logs-dump) logs_dump "${2:-anchor-logs}" ;;
   status) podman ps --filter network="$NET" --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}' ;;
   doctor) doctor ;;
-  payout-watch) payout_watch ;;
-  *) die "usage: $0 <up|down|logs|logs-dump [dir]|status|doctor|payout-watch>" ;;
+  payout-watch) payout_watch "${2:-}" ;;
+  stop-anchor) stop_anchor ;;
+  start-anchor) start_anchor ;;
+  *) die "usage: $0 <up|down|logs|logs-dump [dir]|status|doctor|payout-watch [process|refund]|stop-anchor|start-anchor>" ;;
 esac

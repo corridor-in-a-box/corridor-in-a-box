@@ -7,6 +7,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
+### Added — live testnet scenarios for limits, customer KYC info, outage recovery, and refunds ([#676](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/676), [#675](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/675), [#674](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/674), [#673](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/673))
+
+- Live testnet scenario runner for amounts outside anchor limits (`examples/verify-scenario-limits.ts`, `pnpm verify:scenario-limits`), asserting refusal with `PRESETTLE_AMOUNT_OUT_OF_RANGE` and 0 money moved ([#676](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/676)).
+- Live testnet scenario runner for anchor KYC inquiries (`examples/verify-scenario-needs-info.ts`, `pnpm verify:scenario-needs-info`), asserting halt with `PRESETTLE_RECEIVER_NOT_ACCEPTED` before settle and 0 money moved ([#673](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/673)).
+- Live testnet scenario runner for anchor outages during the flow (`examples/verify-scenario-anchor-down.ts`, `pnpm verify:scenario-anchor-down`), exercising anchor stop/restart and verifying recovery without double settlement ([#675](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/675)).
+- Live testnet scenario runner for payout failures and refunds (`examples/verify-scenario-refund.ts`, `pnpm verify:scenario-refund`), exercising `payout-watch refund` and asserting terminal state `refunded` with exactly 1 on-chain settlement ([#674](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/674)).
+- Added sibling GitHub Actions workflow `.github/workflows/reference-live-scenarios.yml` and unified runner `examples/verify-live-scenarios.ts` (`pnpm verify:scenarios`) writing verification matrices to `$GITHUB_STEP_SUMMARY`.
+- Added unit tests in `tests/live-scenarios.test.ts` covering all four failure scenarios and invariants.
+
 ### Fixed — stale documentation and comments
 
 - Docs said no transition enters `refund_pending` and that `refunded` is reachable only when

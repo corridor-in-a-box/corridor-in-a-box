@@ -263,6 +263,28 @@ a trustline for it — `op_src_no_trust` above is exactly what a missing trustli
 looks like. `pnpm verify:settle` needs no such setup because it settles in native
 XLM; this one settles the asset the anchor actually quotes.
 
+### Live testnet failure scenarios
+
+Four automated scenario runners verify that error conditions, anchor outages, KYC roadblocks, and off-chain payout failures halt safely, move 0 money when refused prior to settlement, and never settle twice. These run as part of the `reference-live-scenarios` workflow and record verification matrices directly into the job summary (`$GITHUB_STEP_SUMMARY`).
+
+```bash
+# Run all live failure scenarios against the reference anchor
+pnpm verify:scenarios
+
+# Or run individual failure scenarios:
+pnpm verify:scenario-limits       # Issue #676: amounts outside anchor limits
+pnpm verify:scenario-needs-info   # Issue #673: anchor asks for more customer KYC info
+pnpm verify:scenario-anchor-down  # Issue #675: anchor down during flow and safe recovery
+pnpm verify:scenario-refund       # Issue #674: payout fails and anchor refunds
+```
+
+| Scenario                        | Script                        | Trigger / Failure Condition                              | Invariant Verified                                                                                         |
+| ------------------------------- | ----------------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Amounts outside limits (#676)   | `verify:scenario-limits`      | Amount below `/sep31/info` min or above max              | Refused before settle with `PRESETTLE_AMOUNT_OUT_OF_RANGE`; exactly 0 money moved                          |
+| Customer KYC needs info (#673)  | `verify:scenario-needs-info`  | Receiver customer in `NEEDS_INFO` status                 | Halts cleanly before settle with `PRESETTLE_RECEIVER_NOT_ACCEPTED`; exactly 0 money moved                  |
+| Anchor outage & recovery (#675) | `verify:scenario-anchor-down` | Container stopped mid-flow then restarted                | No premature moves during outage; resumes cleanly after restart without double settlement (`txCount <= 1`) |
+| Payout failure & refund (#674)  | `verify:scenario-refund`      | `payout-watch refund` simulates off-chain payout failure | Reconciles to terminal state `refunded`; exactly 1 on-chain settlement transaction                         |
+
 **Known sharp edge in the reference server:** a small `AMOUNT` makes its
 `GET /rate` throw `Buy amount must be greater than zero`, which surfaces as
 `QUOTE_UNAVAILABLE: quote HTTP 502`. `AMOUNT=1.00` reproduces it; the default of
