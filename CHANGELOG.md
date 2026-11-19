@@ -7,6 +7,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
+### Added — a schema for `contracts/deployments.json` and the testnet upgrade record ([#701](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/701))
+
+- `contracts/deployments.schema.json` describes deployments and upgrades (wasm hash, transaction
+  hash, date and ledger). `public` stays valid with null addresses, and a network that records a
+  contract must also record `deployedAt`.
+- `contracts/deployments.json` records the 2026-11-17 testnet `upgrade()` of the registry and the
+  attester. The hashes were read from the testnet ledger, not estimated.
+- `tests/deployments.test.ts` validates the file and checks that missing or malformed fields fail.
+
 ### Fixed — stale documentation and comments
 
 - Docs said no transition enters `refund_pending` and that `refunded` is reachable only when
