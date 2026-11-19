@@ -7,6 +7,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
+### Added — live crash-resume scenario against the reference anchor ([#677](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/677))
+
+- `pnpm verify:crash-resume` kills the service with `SIGKILL` after the payment has settled on
+  testnet, restarts it on the same Postgres and requires the run to reach `completed` with the
+  same transaction hash. It also checks Horizon for exactly one matching payment transaction.
+- The `reference-crash-resume` workflow runs it daily and on demand, writes the result to the
+  job summary and uploads the service and anchor logs on failure.
+
 ### Fixed — stale documentation and comments
 
 - Docs said no transition enters `refund_pending` and that `refunded` is reachable only when
