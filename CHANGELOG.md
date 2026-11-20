@@ -7,6 +7,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
+### Added — poll SEP-38 indicative prices from attested anchors ([#590](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/590))
+
+- Added `collectSep38Rates` and `createSep38CollectorStep` in `@corridor/engine` to poll indicative prices from anchors in the registry whose `sep38_quote` probe passed.
+- Implemented pair discovery via `GET /prices` followed by reference amount pricing via `GET /price`, tagging samples with `source: "sep38_price"` and the anchor domain.
+- Added per-anchor timeout and error isolation so individual anchor failures (such as 401 Unauthorized, timeout, or malformed body) do not halt the collection run.
+
 ### Fixed — stale documentation and comments
 
 - Docs said no transition enters `refund_pending` and that `refunded` is reachable only when
