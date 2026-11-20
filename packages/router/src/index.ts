@@ -98,3 +98,17 @@ export {
 
 export { createAdapterRegistry } from "./adapters";
 export type { AdapterFactory, AdapterRegistry } from "./adapters";
+export {
+  DEFAULT_PARALLEL_DEADLINE_MS,
+  formatNoPriceWithinReason,
+  priceCandidatesInParallel,
+} from "./parallel-pricer";
+export type {
+  DroppedCandidateResult,
+  ParallelPricingCandidate,
+  ParallelPricingOptions,
+  ParallelPricingResult,
+  PriceAnchorContext,
+  PriceCandidateFn,
+  PricedCandidateResult,
+} from "./parallel-pricer";
