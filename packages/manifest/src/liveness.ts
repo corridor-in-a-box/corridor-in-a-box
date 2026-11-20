@@ -68,8 +68,10 @@ export function liveness(c: Corridor, now: Date = new Date()): Liveness {
     requiredEndpoint in endpoints
       ? (endpoints as unknown as Record<string, unknown>)[requiredEndpoint]
       : undefined;
+  // Direct wallet delivery requires no off-chain anchor endpoint URL.
   const hasRequiredEndpoint =
-    typeof requiredEndpointValue === "string" && !!requiredEndpointValue;
+    protocol === "wallet" ||
+    (typeof requiredEndpointValue === "string" && !!requiredEndpointValue);
   const quoteServer = "quote_server" in endpoints ? endpoints.quote_server : undefined;
   const kycServer = "kyc_server" in endpoints ? endpoints.kyc_server : undefined;
   const webAuth = "web_auth" in endpoints ? endpoints.web_auth : undefined;
@@ -80,7 +82,7 @@ export function liveness(c: Corridor, now: Date = new Date()): Liveness {
     warn(
       `dest has no required ${requiredEndpoint} endpoint for protocol ${protocol} — corridor cannot settle. NOT runnable.`,
     );
-  } else if (!verifiedAt) {
+  } else if (protocol !== "wallet" && !verifiedAt) {
     warn(
       "dest endpoints are UNVERIFIED — the URLs below have never been confirmed against " +
         "a published stellar.toml. Do not treat this lane as runnable. Set " +
@@ -137,7 +139,7 @@ export function liveness(c: Corridor, now: Date = new Date()): Liveness {
 
   let state: LivenessState = !hasRequiredEndpoint
     ? "not-runnable"
-    : verifiedAt
+    : protocol === "wallet" || verifiedAt
       ? "verified"
       : "unverified";
 
