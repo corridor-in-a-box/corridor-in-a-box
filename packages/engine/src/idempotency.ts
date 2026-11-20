@@ -38,6 +38,17 @@ export interface StoredRun {
   memo?: string;
   memoType?: "text" | "hash" | "id";
   /**
+   * The `name` of the receiving anchor this run opened with, recorded when the
+   * route is first picked so a resume can refuse to re-route a run that has
+   * already reached `settling` (RFC 0004). Once settlement starts the anchor is
+   * pinned: reconciling against a different anchor would poll the wrong
+   * transaction, so a resume that resolves to a different name is refused with
+   * `ROUTE_PINNED` rather than silently switching. Undefined on runs created
+   * before this field existed, which are allowed to resume under legacy
+   * behaviour (the guard is skipped).
+   */
+  receivingAnchor?: string;
+  /**
    * Identifier of a refund already requested for this run — the refund leg's
    * own reference, not the settlement's.
    *
@@ -150,6 +161,9 @@ export class InMemoryIdempotencyStore implements IdempotencyStore {
       // Once a source deposit reference is written, an older or incomplete
       // run snapshot must never erase it and permit a second deposit on resume.
       sourceTransactionId: existing?.sourceTransactionId ?? run.sourceTransactionId,
+      // The anchor a run opened with is pinned once settlement starts, so a
+      // later snapshot that lost the field must not un-pin the route (RFC 0004).
+      receivingAnchor: existing?.receivingAnchor ?? run.receivingAnchor,
     });
   }
 

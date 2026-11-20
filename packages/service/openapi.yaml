@@ -398,6 +398,7 @@ components:
         - CORRIDOR_HALTED
         - DRY_RUN_COMPLETE
         - ROUTE_REFUSED
+        - ROUTE_PINNED
     EngineError:
       type: object
       required: [error, message]

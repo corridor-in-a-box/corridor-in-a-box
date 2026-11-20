@@ -69,7 +69,15 @@ export type CorridorErrorCode =
    * e.g. an unattested anchor. Fail closed: nothing was sent, a fresh run is
    * persisted as `failed`, and the key is spent. Not retryable.
    */
-  | "ROUTE_REFUSED";
+  | "ROUTE_REFUSED"
+  /**
+   * A run that has reached `settling` was resumed against a different receiving
+   * anchor than the one it opened with. Once settlement has started the route is
+   * pinned — switching anchors then would reconcile against the wrong anchor —
+   * so the re-route is refused and the stored run is left untouched. Not a
+   * failure of the lane and not retryable. See RFC 0004.
+   */
+  | "ROUTE_PINNED";
 
 /**
  * Returns true if the error code is a pre-settle gate check refusal.

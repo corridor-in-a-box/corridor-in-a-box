@@ -7,6 +7,24 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
+### Added — engine route fallback before funds move ([#626](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/626))
+
+- `RouteDecision` gains an optional ordered `alternates: RouteOption[]`, and
+  `EngineDeps.maxAlternates` (default 2, `0` disables) bounds how many are tried. A run that
+  fails before any funds move — a refused quote, a KYC rejection, a transaction that cannot be
+  opened, or a pre-settle gate refusal — is marked `failed` and a linked run starts on the next
+  option under `<key>:alt1`, `<key>:alt2`. The audit entries carry `fallbackTo` on the failed run
+  and `fallbackFrom` on the alternate's first transition.
+- The boundary is settlement: `failRun` records no forward link once the run entered `settling`
+  or opened a source deposit, so a post-settle failure never starts an alternate. A run now
+  stores the receiving anchor it opened with, and resuming a run that has reached `settling`
+  against a different anchor is refused with the new `ROUTE_PINNED` code (HTTP 409) and the
+  stored row left untouched. The Postgres store migrates the `receiving_anchor` column and keeps
+  it once set.
+- `tests/route-fallback.test.ts` covers failure at each pre-settle step, no fallback after
+  settle, the alternate limit, and the settling re-route refusal. Design in
+  `docs/rfcs/0004-smart-router.md`.
+
 ### Fixed — stale documentation and comments
 
 - Docs said no transition enters `refund_pending` and that `refunded` is reachable only when

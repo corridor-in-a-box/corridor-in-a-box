@@ -237,11 +237,12 @@ function fakeDb(): Queryable & { table: Map<string, Record<string, unknown>> } {
         deposit_address: params[13],
         memo: params[14],
         memo_type: params[15],
-        refund_id: params[16],
-        last_error: params[17],
-        owner: params[18],
-        settlement: params[19],
-        manifest_hash: params[20],
+        receiving_anchor: params[16],
+        refund_id: params[17],
+        last_error: params[18],
+        owner: params[19],
+        settlement: params[20],
+        manifest_hash: params[21],
       };
       // create(): INSERT … ON CONFLICT DO NOTHING RETURNING — only the first
       // writer for a key lands a row and gets it back; a conflict returns [].
@@ -259,6 +260,7 @@ function fakeDb(): Queryable & { table: Map<string, Record<string, unknown>> } {
           ...incoming,
           settlement_kind: incoming.settlement_kind ?? current?.settlement_kind,
           settlement_ref: incoming.settlement_ref ?? current?.settlement_ref,
+          receiving_anchor: current?.receiving_anchor ?? incoming.receiving_anchor,
           refund_id: current?.refund_id ?? incoming.refund_id,
           manifest_hash: current?.manifest_hash ?? incoming.manifest_hash,
         });
@@ -387,6 +389,27 @@ describe("refund state round-trips", () => {
     const got = await store.get("k-rf");
     expect(got?.refundId).toBe("hash_back");
     expect(got?.stellarTxHash).toBe("hash_out");
+  });
+
+  it("PostgresIdempotencyStore round-trips receivingAnchor and keeps it once set", async () => {
+    // The anchor a run opened with is pinned once settlement starts, so a later
+    // snapshot that lost the field must not un-pin the route (RFC 0004).
+    const store = new PostgresIdempotencyStore(fakeDb());
+    await store.put({
+      idempotencyKey: "k-anchor",
+      corridorId: "c",
+      state: "settling",
+      version: 4,
+      receivingAnchor: "anchor-a",
+    });
+    expect((await store.get("k-anchor"))?.receivingAnchor).toBe("anchor-a");
+    await store.put({
+      idempotencyKey: "k-anchor",
+      corridorId: "c",
+      state: "settled",
+      version: 5,
+    });
+    expect((await store.get("k-anchor"))?.receivingAnchor).toBe("anchor-a");
   });
 
   it("PostgresIdempotencyStore never lets a later write erase refundId", async () => {

@@ -232,6 +232,11 @@ export const STATUS_BY_CODE: Record<CorridorErrorCode, number> = {
   // like CORRIDOR_HALTED: a well-formed request refused because no trusted
   // route is available, not a fault in the caller's input or in this server.
   ROUTE_REFUSED: 503,
+  // A run that has reached settling was resumed against a different anchor than
+  // the one it opened with. 409: the run is pinned once settlement starts, so
+  // the re-route is a conflict the caller cannot resolve by retrying the same
+  // key — the stored run is left untouched and resumable. See RFC 0004.
+  ROUTE_PINNED: 409,
 };
 
 /** Token-bucket rate limiter, keyed per client. In-memory; swap for Redis at scale. */

@@ -10,19 +10,42 @@ import type { Corridor } from "@corridor/manifest";
 import type { AnchorAdapter, SourceAnchorAdapter } from "@corridor/adapter-kit";
 import type { PaymentIntent } from "@corridor/types";
 
-export interface RouteDecision {
+/**
+ * One candidate route the engine may settle through: a receiving anchor, an
+ * optional sending anchor for non-prefunded corridors, and how the choice was
+ * reached. A `RouteDecision` is one of these (the primary) plus, optionally,
+ * ordered `alternates` the engine falls back to before any funds move (RFC 0004).
+ */
+export interface RouteOption {
   /** The receiving anchor chosen for this payment. */
   readonly receiving: AnchorAdapter;
   /** Sending anchor used to on-ramp funds for non-prefunded corridors. */
   readonly sending?: SourceAnchorAdapter;
+  /** How the route decision was reached: verified against on-chain evidence or assumed from manifest. */
+  readonly trust: "attested" | "manifest";
+}
+
+export interface RouteDecision extends RouteOption {
   /**
    * Reserved for split routing across multiple anchors (weights sum to 1).
    * The engine ignores this field today and reads only `receiving`, so setting
    * it does not change where a payment goes. See docs/route-resolver.md#split.
    */
   readonly split?: ReadonlyArray<{ adapter: AnchorAdapter; weight: number }>;
-  /** How the route decision was reached: verified against on-chain evidence or assumed from manifest. */
-  readonly trust: "attested" | "manifest";
+  /**
+   * Ordered fallback options tried in turn when this route fails BEFORE any
+   * funds move — a refused quote, a KYC rejection, or a transaction that cannot
+   * be opened (RFC 0004). The engine marks the failed run and starts a linked
+   * run on the next option under the key `<key>:alt1`, then `<key>:alt2`, up to
+   * the configured limit (default 2). Once a run reaches `settling` no further
+   * option is tried and a resume that would change the anchor is refused, so an
+   * `alternates` entry is never reached after money has left.
+   *
+   * Optional and additive: a resolver that returns a single-anchor decision
+   * (the shipped `StaticRouteResolver` and `RegistryRouteResolver`) leaves it
+   * unset, and the engine behaves exactly as before.
+   */
+  readonly alternates?: readonly RouteOption[];
 }
 
 /**

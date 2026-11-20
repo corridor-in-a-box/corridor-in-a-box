@@ -156,6 +156,33 @@ run("PostgresIdempotencyStore (live Postgres)", () => {
     expect((await s.get("k-keep"))?.refundId).toBe("hash_back");
   });
 
+  it("round-trips receivingAnchor and keeps it once set", async () => {
+    // The receiving anchor a run opened with, so a resume can refuse to re-route
+    // a run that has reached settling (RFC 0004). Set once and never cleared.
+    const s = store();
+    await s.create(newRun("k-anchor"));
+    await s.put({
+      idempotencyKey: "k-anchor",
+      corridorId: "c",
+      state: "settling",
+      version: 2,
+      receivingAnchor: "anchor-a",
+    });
+    expect((await s.get("k-anchor"))?.receivingAnchor).toBe("anchor-a");
+    // A later write that lost the field must not erase it (the run is pinned).
+    await s.put({
+      idempotencyKey: "k-anchor",
+      corridorId: "c",
+      state: "settled",
+      version: 3,
+      receivingAnchor: undefined,
+    });
+    expect((await s.get("k-anchor"))?.receivingAnchor).toBe("anchor-a");
+    // A run with no anchor reads back undefined, not null or "".
+    await s.create(newRun("k-no-anchor"));
+    expect((await s.get("k-no-anchor"))?.receivingAnchor).toBeUndefined();
+  });
+
   it("adds refund_id to a table created by the previous version", async () => {
     // The upgrade path, against a real server: build the pre-change table
     // exactly as it was, run migrate(), and check the column arrives. This is
