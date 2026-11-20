@@ -38,6 +38,14 @@ export const exampleReceiverExporter: OnboardingExporter = {
       contact_name: contact.name,
       contact_email: contact.email,
     };
+    const missing = Object.keys(form).filter((field) => !form[field]?.trim());
+    if (!address.line1.trim() || !address.city.trim()) missing.push("registered_address");
+    if (missing.length > 0) {
+      return err({
+        code: "PROFILE_INCOMPLETE",
+        message: `Example Receiver requires ${[...new Set(missing)].join(", ")}`,
+      });
+    }
     if (profile.tradingName) form.trading_as = profile.tradingName;
     if (contact.phone) form.contact_phone = contact.phone;
     return ok<ReceiverForm>(form);

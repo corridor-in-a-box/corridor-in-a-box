@@ -112,6 +112,25 @@ describe("examples/onboarding/example-receiver-exporter.ts", () => {
     expect(result.value).not.toHaveProperty("contact_phone");
   });
 
+  it.each([
+    ["company_name", { legalName: " " }],
+    ["registration_no", { registrationNumber: "" }],
+    ["registered_address", { address: { ...profile.address, line1: "" } }],
+    ["registered_address", { address: { ...profile.address, city: " " } }],
+    ["address_country", { address: { ...profile.address, country: "" } }],
+    [
+      "contact_email",
+      { contacts: [{ role: "compliance" as const, name: "Tunde Bello", email: "" }] },
+    ],
+  ])("fails with PROFILE_INCOMPLETE when %s is blank", (field, patch) => {
+    const result = exampleReceiverExporter.export({ ...profile, ...patch });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("PROFILE_INCOMPLETE");
+      expect(result.error.message).toContain(field);
+    }
+  });
+
   it("fails with PROFILE_INCOMPLETE when no usable contact exists", () => {
     const result = exampleReceiverExporter.export({
       ...profile,
