@@ -98,3 +98,10 @@ export {
 
 export { createAdapterRegistry } from "./adapters";
 export type { AdapterFactory, AdapterRegistry } from "./adapters";
+
+export { PinnedRouteResolver, UnpinnedRouteError } from "./pinned-resolver";
+export type {
+  PinnedRouteResolverOptions,
+  PinnedRunRecord,
+  PinnedRunStore,
+} from "./pinned-resolver";
