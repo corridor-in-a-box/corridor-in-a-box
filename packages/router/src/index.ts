@@ -172,3 +172,11 @@ export type {
   Sep31InfoCacheOptions,
   TransactionFieldSpec,
 } from "./limits-filter";
+
+export type {
+  PriceLabel,
+  RouteOption,
+  RoutePlanner,
+  RoutePolicy,
+  RouteRequest,
+} from "./planner";
