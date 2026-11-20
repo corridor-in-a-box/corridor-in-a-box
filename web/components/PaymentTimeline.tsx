@@ -78,9 +78,11 @@ export function PaymentTimeline({
         const res = await fetch(`/api/payments/${encodeURIComponent(idempotencyKey)}`, {
           cache: "no-store",
         });
-        const body = (await res.json()) as PaymentStatusLike & { error?: string };
+        const body = (await res.json().catch(() => ({}))) as Partial<PaymentStatusLike> & {
+          error?: string;
+        };
         if (res.ok && typeof body.state === "string") {
-          next = body;
+          next = { ...body, state: body.state };
         } else if (!(submitting && res.status === 404)) {
           retry = res.status >= 500;
           if (!cancelled) setPollError(body.error ?? `status request failed (HTTP ${res.status})`);

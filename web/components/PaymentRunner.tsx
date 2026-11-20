@@ -115,7 +115,7 @@ export function PaymentRunner({ initialCorridor }: { initialCorridor?: string })
       }
       setResult(outcome);
     } catch (e) {
-      setWatched((prev) => prev && { ...prev, submitting: false });
+      setWatched(null);
       setResult({
         ok: false,
         state: "failed",
