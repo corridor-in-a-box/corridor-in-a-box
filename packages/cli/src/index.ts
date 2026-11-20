@@ -53,11 +53,13 @@ import {
   runRegistryCheck,
   type RegistryNetwork,
 } from "./plan-registry.js";
+import { routesCommand } from "./routes.js";
 
 /** The first line is the main usage text; the breaker help follows it. */
 const USAGE = [
   "usage: corridor <validate|plan|lint|canary|new> <file.corridor.yaml|domain> [options] | runs list --state held | resolve <key> --outcome <outcome> --note <text>",
   "       corridor plan <file.corridor.yaml> [--json] [--registry [--network testnet|public]]",
+  "       corridor routes --amount <amount> --to <asset> --country <country> [--offline] [--network <public|testnet>] [--dir <dir>] [--json]",
   '       corridor breaker <status [corridorId] | reset <corridorId> --reason "…">',
   "       corridor new <domain> [--source-asset <asset>] [--network <public|testnet>] [--out <file>] [--allow-not-runnable]",
   "",
@@ -79,6 +81,7 @@ async function main(argv: string[]): Promise<number> {
   if (cmd === "resolve") return resolveCommand(argv.slice(1));
   if (cmd === "breaker") return breakerCommand(argv.slice(1));
   if (cmd === "new") return newCommand(argv.slice(1));
+  if (cmd === "routes") return routesCommand(argv.slice(1));
   if (!cmd || (cmd !== "validate" && cmd !== "plan" && cmd !== "lint" && cmd !== "canary")) {
     console.error(USAGE);
     return EXIT_USAGE;
@@ -365,10 +368,12 @@ async function withStore(
 }
 
 void main(process.argv.slice(2))
-  .then((code) => process.exit(code))
+  .then((code) => {
+    process.exitCode = code;
+  })
   .catch((error: unknown) => {
     console.error(
       `✗ corridor command failed: ${error instanceof Error ? error.message : String(error)}`,
     );
-    process.exit(1);
+    process.exitCode = 1;
   });

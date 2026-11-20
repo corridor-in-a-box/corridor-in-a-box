@@ -6,6 +6,8 @@ import {
   UnattestedAnchorError,
   createAdapterRegistry,
   loadResolver,
+  rankRoutes,
+  matchesRouteTarget,
   ROUTE_RESOLVER_API_VERSION,
   type AttestationSource,
   type LoadResolverCtx,
@@ -462,4 +464,148 @@ it("says which clause a broken resolver fails", async () => {
   expect(report.results[1].detail).toContain("anchor-1 then anchor-2");
   expect(report.results[2].detail).toContain(UNRESOLVABLE_DOMAIN);
   expect(report.results[3].detail).toMatch(/weights sum to/);
+});
+
+describe("smart-router (rankRoutes and matchesRouteTarget)", () => {
+  function makeCorridor(overrides: {
+    id: string;
+    domain?: string;
+    limits?: { min_amount?: string; max_amount?: string };
+    proof?: {
+      canary_completed_at: string;
+      stellar_tx_hash: string;
+      anchor_transaction_id: string;
+      amount: string;
+    };
+    endpoints_verified_at?: string;
+  }): Corridor {
+    const domain = overrides.domain ?? "real-anchor.com";
+    const r = parseCorridor({
+      id: overrides.id,
+      source: { name: "Src", asset: "USDC", endpoints: { home_domain: "src.example" } },
+      dest: {
+        name: "Dest",
+        asset: "iso4217:NGN",
+        protocol: "sep31",
+        endpoints: {
+          home_domain: domain,
+          transfer_server_sep31: `https://${domain}/sep31`,
+          web_auth: `https://${domain}/auth`,
+          kyc_server: `https://${domain}/kyc`,
+          quote_server: `https://${domain}/sep38`,
+          ...(overrides.endpoints_verified_at
+            ? { endpoints_verified_at: overrides.endpoints_verified_at }
+            : {}),
+        },
+      },
+      fx: {
+        path: ["USD", "USDC", "NGN"],
+        quote_source: "sep38",
+        quote_ttl_seconds: 60,
+        who_holds_risk: "receiving_anchor",
+      },
+      compliance: {
+        source_jurisdiction: "US",
+        dest_jurisdiction: "NG",
+        travel_rule_profile: "default",
+      },
+      settlement: { bridge_asset: "USDC", network: "public", asset_issuer: "GISSUER" },
+      recovery: {},
+      ...(overrides.limits ? { limits: overrides.limits } : {}),
+      ...(overrides.proof ? { proof: overrides.proof } : {}),
+    });
+    if (!r.ok) throw new Error(`fixture invalid: ${r.error.message}`);
+    return r.value;
+  }
+
+  it("matchesRouteTarget correctly matches asset and country", () => {
+    const c = makeCorridor({ id: "ng-1" });
+    expect(matchesRouteTarget(c, "NGN", "NG")).toBe(true);
+    expect(matchesRouteTarget(c, "iso4217:NGN", "ng")).toBe(true);
+    expect(matchesRouteTarget(c, "USD", "NG")).toBe(false);
+    expect(matchesRouteTarget(c, "NGN", "US")).toBe(false);
+  });
+
+  it("ranks proven route ahead of verified and unverified routes", async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const proven = makeCorridor({
+      id: "c-proven",
+      endpoints_verified_at: today,
+      proof: {
+        canary_completed_at: today,
+        stellar_tx_hash: "a".repeat(64),
+        anchor_transaction_id: "tx-1",
+        amount: "100.00",
+      },
+    });
+    const verified = makeCorridor({ id: "c-verified", endpoints_verified_at: today });
+    const unverified = makeCorridor({ id: "c-unverified" });
+
+    const routes = await rankRoutes(
+      { amount: "50", to: "NGN", country: "NG", offline: true },
+      [unverified, verified, proven],
+    );
+
+    expect(routes.map((r) => r.corridorId)).toEqual([
+      "c-proven",
+      "c-verified",
+      "c-unverified",
+    ]);
+    expect(routes[0]?.label).toBe("PROVEN");
+    expect(routes[0]?.labels).toContain("RECOMMENDED");
+    expect(routes[1]?.label).toBe("VERIFIED");
+    expect(routes[2]?.label).toBe("UNVERIFIED");
+  });
+
+  it("marks route as INELIGIBLE when amount exceeds max_amount", async () => {
+    const c = makeCorridor({
+      id: "c-limited",
+      limits: { min_amount: "10.00", max_amount: "50.00" },
+    });
+
+    const routes = await rankRoutes(
+      { amount: "100", to: "NGN", country: "NG", offline: true },
+      [c],
+    );
+
+    expect(routes).toHaveLength(1);
+    expect(routes[0]?.label).toBe("INELIGIBLE");
+    expect(routes[0]?.withinLimits).toBe(false);
+    expect(routes[0]?.reasons.some((r) => r.includes("exceeds maximum limit"))).toBe(true);
+  });
+
+  it("marks route as HALTED when breaker is open", async () => {
+    const c = makeCorridor({ id: "c-halted" });
+
+    const routes = await rankRoutes(
+      { amount: "50", to: "NGN", country: "NG", offline: true },
+      [c],
+      { isBreakerOpen: (id) => id === "c-halted" },
+    );
+
+    expect(routes).toHaveLength(1);
+    expect(routes[0]?.label).toBe("HALTED");
+    expect(routes[0]?.runnable).toBe(false);
+    expect(routes[0]?.reasons.some((r) => r.includes("circuit breaker open"))).toBe(true);
+  });
+
+  it("in live mode queries anchor using provided fetchImpl", async () => {
+    const c = makeCorridor({ id: "c-live" });
+    const calls: string[] = [];
+    const mockFetch = (async (url: string | URL | Request) => {
+      calls.push(String(url));
+      return new Response("VERSION = '2.0.0'\n", { status: 200 });
+    }) as typeof fetch;
+
+    const routes = await rankRoutes(
+      { amount: "50", to: "NGN", country: "NG", offline: false },
+      [c],
+      { fetchImpl: mockFetch },
+    );
+
+    expect(calls).toEqual(["https://real-anchor.com/.well-known/stellar.toml"]);
+    expect(routes[0]?.reasons.some((r) => r.includes("anchor stellar.toml reachable"))).toBe(
+      true,
+    );
+  });
 });

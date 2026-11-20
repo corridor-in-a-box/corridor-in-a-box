@@ -98,3 +98,12 @@ export {
 
 export { createAdapterRegistry } from "./adapters";
 export type { AdapterFactory, AdapterRegistry } from "./adapters";
+
+export {
+  rankRoutes,
+  matchesRouteTarget,
+  type RouteQuery,
+  type RankedRoute,
+  type RouteLabel,
+  type RouteRankOptions,
+} from "./smart-router";

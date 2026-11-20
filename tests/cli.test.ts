@@ -29,6 +29,7 @@ import {
   isPlaceholderDomain,
   lintCorridor,
 } from "../packages/cli/src/lint";
+import { parseRoutesArgs, formatRoutesTable } from "../packages/cli/src/routes";
 
 // packages/cli/src/index.ts calls process.exit(main(...)) at module top level
 // and has no vitest path alias, so importing it directly would kill the test
@@ -1103,5 +1104,184 @@ describe("corridor lint", () => {
     const r = run(["lint"]);
     expect(r.status).toBe(2);
     expect(r.stderr).toContain("usage: corridor lint <file.corridor.yaml>");
+  });
+});
+
+describe("corridor routes", () => {
+  describe("argument validation", () => {
+    it("exits 2 when --amount is missing", () => {
+      const r = run(["routes", "--to", "NGN", "--country", "NG"]);
+      expect(r.status).toBe(2);
+      expect(r.stderr).toContain("--amount <amount> is required");
+    });
+
+    it("exits 2 when --to is missing", () => {
+      const r = run(["routes", "--amount", "100", "--country", "NG"]);
+      expect(r.status).toBe(2);
+      expect(r.stderr).toContain("--to <asset> is required");
+    });
+
+    it("exits 2 when --country is missing", () => {
+      const r = run(["routes", "--amount", "100", "--to", "NGN"]);
+      expect(r.status).toBe(2);
+      expect(r.stderr).toContain("--country <country> is required");
+    });
+
+    it("exits 2 when --amount has no value", () => {
+      const r = run(["routes", "--amount"]);
+      expect(r.status).toBe(2);
+      expect(r.stderr).toContain("--amount requires a value");
+    });
+
+    it("exits 2 when --amount is invalid or non-positive", () => {
+      const r1 = run(["routes", "--amount", "abc", "--to", "NGN", "--country", "NG"]);
+      expect(r1.status).toBe(2);
+      expect(r1.stderr).toContain("positive decimal amount");
+
+      const r2 = run(["routes", "--amount", "0", "--to", "NGN", "--country", "NG"]);
+      expect(r2.status).toBe(2);
+      expect(r2.stderr).toContain("positive decimal amount");
+
+      const r3 = run(["routes", "--amount", "-5", "--to", "NGN", "--country", "NG"]);
+      expect(r3.status).toBe(2);
+      expect(r3.stderr).toContain("positive decimal amount");
+    });
+
+    it("exits 2 on an unknown option", () => {
+      const r = run([
+        "routes",
+        "--amount",
+        "100",
+        "--to",
+        "NGN",
+        "--country",
+        "NG",
+        "--unknown-flag",
+      ]);
+      expect(r.status).toBe(2);
+      expect(r.stderr).toContain('unknown option "--unknown-flag"');
+    });
+
+    it("exits 2 on unexpected positional arguments", () => {
+      const r = run([
+        "routes",
+        "--amount",
+        "100",
+        "--to",
+        "NGN",
+        "--country",
+        "NG",
+        "extra-arg",
+      ]);
+      expect(r.status).toBe(2);
+      expect(r.stderr).toContain('unexpected argument "extra-arg"');
+    });
+  });
+
+  describe("routes output", () => {
+    it("offline mode: prints ranked options with labels and reasons for NGN / NG", () => {
+      const r = run([
+        "routes",
+        "--amount",
+        "100",
+        "--to",
+        "NGN",
+        "--country",
+        "NG",
+        "--offline",
+      ]);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain("ng-cowrie");
+      expect(r.stdout).toContain("cowrie.exchange");
+      expect(r.stdout).toContain("VERIFIED");
+      expect(r.stdout).toContain("dest endpoints confirmed");
+      expect(r.stdout).toContain("mode: offline");
+    });
+
+    it("live mode: queries anchors and prints ranked options", () => {
+      const r = run(["routes", "--amount", "100", "--to", "NGN", "--country", "NG"]);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain("ng-cowrie");
+      expect(r.stdout).toContain("cowrie.exchange");
+      expect(r.stdout).toContain("VERIFIED");
+      expect(r.stdout).toContain("mode: live");
+    });
+
+    it("--json: outputs valid structured JSON array of ranked routes", () => {
+      const r = run([
+        "routes",
+        "--amount",
+        "100",
+        "--to",
+        "NGN",
+        "--country",
+        "NG",
+        "--offline",
+        "--json",
+      ]);
+      expect(r.status).toBe(0);
+      const parsed = JSON.parse(r.stdout) as Array<{
+        corridorId: string;
+        destDomain: string;
+        label: string;
+        labels: string[];
+        reasons: string[];
+        runnable: boolean;
+      }>;
+      expect(Array.isArray(parsed)).toBe(true);
+      expect(parsed.length).toBeGreaterThan(0);
+      expect(parsed[0]?.corridorId).toBe("ng-cowrie");
+      expect(parsed[0]?.destDomain).toBe("cowrie.exchange");
+      expect(parsed[0]?.label).toBe("VERIFIED");
+      expect(parsed[0]?.labels).toContain("RECOMMENDED");
+      expect(parsed[0]?.reasons.length).toBeGreaterThan(0);
+    });
+
+    it("reports no matching routes when none match query", () => {
+      const r = run([
+        "routes",
+        "--amount",
+        "100",
+        "--to",
+        "JPY",
+        "--country",
+        "JP",
+        "--offline",
+      ]);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain("no matching routes found for 100 JPY in JP");
+    });
+  });
+
+  describe("pure helpers", () => {
+    it("parseRoutesArgs parses valid flags correctly", () => {
+      const res = parseRoutesArgs([
+        "--amount",
+        "50.00",
+        "--to",
+        "USD",
+        "--country",
+        "US",
+        "--offline",
+        "--json",
+      ]);
+      expect(res.ok).toBe(true);
+      if (res.ok) {
+        expect(res.value.amount).toBe("50.00");
+        expect(res.value.to).toBe("USD");
+        expect(res.value.country).toBe("US");
+        expect(res.value.offline).toBe(true);
+        expect(res.value.json).toBe(true);
+      }
+    });
+
+    it("formatRoutesTable handles empty route list", () => {
+      const out = formatRoutesTable(
+        { amount: "100", to: "EUR", country: "FR" },
+        [],
+        "offline",
+      );
+      expect(out).toContain("no matching routes found");
+    });
   });
 });
