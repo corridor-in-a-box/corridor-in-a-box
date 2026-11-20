@@ -173,6 +173,12 @@ describe("mock anchor: the protocol surface", () => {
       expect(q.buy_amount).toBe("9.75");
       expect(q.fee.total).toBe("0.25");
       expect(Number(q.total_price) * Number(q.buy_amount)).toBeCloseTo(10, 5);
+
+      const fine = await fetch(`${priced.url}/sep38/quote`, {
+        method: "POST",
+        body: JSON.stringify({ sell_asset: "stellar:USDC:G", sell_amount: "1.0012345" }),
+      });
+      expect(((await fine.json()) as { buy_amount: string }).buy_amount).toBe("0.7512345");
     } finally {
       await priced.close();
     }

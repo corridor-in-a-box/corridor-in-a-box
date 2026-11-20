@@ -27,6 +27,7 @@ import {
 } from "node:http";
 import { randomUUID } from "node:crypto";
 import { Keypair, Networks, WebAuth } from "@stellar/stellar-sdk";
+import { fromScaled, STROOP_SCALE, toScaled } from "@corridor/types";
 
 export const SCENARIOS = [
   "happy",
@@ -277,13 +278,22 @@ export async function startMockAnchor(opts: MockAnchorOptions = {}): Promise<Moc
       if (!/^\d+(\.\d+)?$/.test(sell)) return send(res, 400, { error: "bad sell_amount" });
       const expires = Date.now() + (scenario === "quote_expired" ? -1_000 : 60_000);
       const fee = opts.quoteFee ?? "0.00";
-      const buy = opts.quoteFee ? (Number(sell) - Number(fee)).toFixed(2) : sell;
-      if (Number(buy) <= 0)
-        return send(res, 400, { error: "sell_amount does not cover the fee" });
+      let buy = sell;
+      let totalPrice = "1.00";
+      if (opts.quoteFee) {
+        const sellScaled = toScaled(sell);
+        const feeScaled = toScaled(fee);
+        if (!sellScaled.ok || !feeScaled.ok || sellScaled.value <= feeScaled.value) {
+          return send(res, 400, { error: "sell_amount does not cover the fee" });
+        }
+        const buyScaled = sellScaled.value - feeScaled.value;
+        buy = fromScaled(buyScaled);
+        totalPrice = fromScaled((sellScaled.value * 10n ** BigInt(STROOP_SCALE)) / buyScaled);
+      }
       return send(res, 201, {
         id: `quote-${randomUUID()}`,
         price: "1.00",
-        total_price: opts.quoteFee ? (Number(sell) / Number(buy)).toFixed(7) : "1.00",
+        total_price: totalPrice,
         expires_at: new Date(expires).toISOString(),
         sell_asset: body.sell_asset,
         buy_asset: body.buy_asset,
