@@ -98,3 +98,16 @@ export {
 
 export { createAdapterRegistry } from "./adapters";
 export type { AdapterFactory, AdapterRegistry } from "./adapters";
+
+export { CachedCapabilitiesStore, filterByLimitsAndFields } from "./limits-filter";
+export type {
+  LimitsDroppedCandidate,
+  LimitsEligibleCandidate,
+  LimitsFilterCandidate,
+  LimitsFilterInput,
+  LimitsFilterOptions,
+  LimitsFilterResult,
+  RouteAssetCapabilities,
+  Sep31InfoCacheOptions,
+  TransactionFieldSpec,
+} from "./limits-filter";
