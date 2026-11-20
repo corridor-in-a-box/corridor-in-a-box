@@ -123,3 +123,24 @@ export {
   ExternalQuoteProvider,
 } from "@corridor/adapter-kit";
 export { checkCompatibility } from "./compat";
+export {
+  DEFAULT_SEP38_REFERENCE_AMOUNT,
+  DEFAULT_SEP38_TIMEOUT_MS,
+  DEFAULT_SEP38_SELL_ASSET,
+  collectSep38Rates,
+  collectSep38RatesForAnchor,
+  findSep38AttestedAnchors,
+  getSep38AttestedDomains,
+  createSep38CollectorStep,
+  parsePricesResponse,
+  type Sep38AnchorTarget,
+  type Sep38RateSample,
+  type CollectSep38RatesOptions,
+  type CollectSep38RatesResult,
+  type DiscoveredPair,
+  type RateSampleSink,
+  type RateSampleSinkInput,
+  type RegistryLike,
+  type CollectorStep,
+  type CollectorStepResult,
+} from "./rate-collector-sep38";
