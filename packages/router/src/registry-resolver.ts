@@ -136,6 +136,13 @@ export interface RegistryResolverOptions {
 
 const WEEK_OF_LEDGERS = 120_960;
 
+/**
+ * How a Soroban client surfaces the registry contract's `NotFound` (code 6),
+ * the same match `contractErrorCode` in @corridor/registry makes. Matched
+ * here rather than imported so this package stays free of the Soroban SDK.
+ */
+const CONTRACT_NOT_FOUND = /Error\(Contract, #6\)/;
+
 /** How a protocol is written when a refusal names it. */
 function protocolLabel(protocol: string): string {
   if (protocol === "sep31") return "SEP-31";
@@ -182,6 +189,15 @@ export async function checkAttestation(
     };
   }
 
+  const notAttested: AttestationCheck = {
+    ok: false,
+    reason: "not attested",
+    detail:
+      `not attested as serving ${protocolLabel(protocol)} receive-side. Advertising ` +
+      `${protocolLabel(protocol)} in a stellar.toml is not sufficient — the ` +
+      `${protocolLabel(protocol)} probe must also pass.`,
+  };
+
   let serves: boolean;
   let staleness: number;
   try {
@@ -190,25 +206,20 @@ export async function checkAttestation(
       registry.staleness(domain),
     ]);
   } catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    // The registry contract answers NotFound for a domain it has never
+    // attested. That is a healthy registry saying "no evidence", not an outage.
+    if (CONTRACT_NOT_FOUND.test(message)) return notAttested;
     // Fail CLOSED. An unreachable registry means we do not know whether this
     // anchor works, and "we do not know" must never resolve to "proceed".
     return {
       ok: false,
       reason: "registry unreachable",
-      detail: `registry lookup failed (${cause instanceof Error ? cause.message : String(cause)})`,
+      detail: `registry lookup failed (${message})`,
     };
   }
 
-  if (!serves) {
-    return {
-      ok: false,
-      reason: "not attested",
-      detail:
-        `not attested as serving ${protocolLabel(protocol)} receive-side. Advertising ` +
-        `${protocolLabel(protocol)} in a stellar.toml is not sufficient — the ` +
-        `${protocolLabel(protocol)} probe must also pass.`,
-    };
-  }
+  if (!serves) return notAttested;
   if (staleness > maxStalenessLedgers) {
     return {
       ok: false,

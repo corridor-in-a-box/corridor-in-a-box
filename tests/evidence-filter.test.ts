@@ -72,6 +72,28 @@ describe("filterByEvidence", () => {
     expect(r).toEqual({ kept: [], dropped: [{ candidate: missing, reason: "not attested" }] });
   });
 
+  it("drops a domain the contract reports as NotFound as not attested, not unreachable", async () => {
+    const notFound = async (): Promise<never> => {
+      throw new Error("HostError: Error(Contract, #6)");
+    };
+    const missing = { domain: "missing.example", protocol: "sep31" };
+    const r = await filterByEvidence([missing], {
+      registry: { ...down, serves: notFound, staleness: notFound },
+    });
+    expect(r).toEqual({ kept: [], dropped: [{ candidate: missing, reason: "not attested" }] });
+  });
+
+  it("still treats other contract errors as registry unreachable", async () => {
+    const otherError = async (): Promise<never> => {
+      throw new Error("HostError: Error(Contract, #60)");
+    };
+    const c = { domain: "a.example", protocol: "sep31" };
+    const r = await filterByEvidence([c], {
+      registry: { ...down, serves: otherError, staleness: otherError },
+    });
+    expect(r.dropped).toEqual([{ candidate: c, reason: "registry unreachable" }]);
+  });
+
   it("drops a candidate attested only for a different protocol", async () => {
     const sep6 = { domain: "a.example", protocol: "sep6" };
     const r = await filterByEvidence([sep6], {
