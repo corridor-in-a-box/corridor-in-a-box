@@ -7,6 +7,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
+### Added — rate history for own completed payments, CLI scaffold from registry, and anchor listing issue template ([#594](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/594), [#670](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/670), [#671](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/671))
+
+- Engine records an effective rate sample (`source: "own_payment"`) when a run reaches `completed`, computed from final amounts (`amount_out / amount_in`), with the anchor domain and run ID. Exactly one sample is recorded per completed run, including after a crash and resume ([#594](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/594)).
+- `corridor new --from-registry <domain>` writes a draft manifest populated from the anchor's on-chain attested data, leaving unverified endpoints and credentials as clearly marked TODO placeholders that fail strict validation until configured ([#670](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/670)).
+- Added an "Add my anchor" issue template (`.github/ISSUE_TEMPLATE/add_anchor.yml`) and README instructions for anchor operators requesting inclusion in the attested fleet ([#671](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/671)).
+
 ### Fixed — stale documentation and comments
 
 - Docs said no transition enters `refund_pending` and that `refunded` is reachable only when

@@ -1,0 +1,54 @@
+name: Add my anchor
+description: Request to add your anchor home domain to the curated registry fleet.
+labels: ["anchor-request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for asking to join the anchor fleet. The scheduled attester probes
+        listed domains regularly to attest SEP conformance and receivable assets
+        on chain.
+  - type: input
+    id: domain
+    attributes:
+      label: Home domain
+      description: The canonical domain publishing `https://<domain>/.well-known/stellar.toml`.
+      placeholder: "anchor.example.com"
+    validations:
+      required: true
+  - type: input
+    id: source
+    attributes:
+      label: Proof of ownership / listing source
+      description: URL showing this domain belongs to your organization (e.g. Stellar Anchor Directory listing or official site).
+      placeholder: "https://anchors.stellar.org/?search=MyAnchor"
+    validations:
+      required: true
+  - type: checkboxes
+    id: seps
+    attributes:
+      label: Advertised SEPs
+      description: Which Stellar Ecosystem Proposals does your anchor support?
+      options:
+        - label: SEP-1 (stellar.toml)
+        - label: SEP-6 (Programmatic deposit/withdraw)
+        - label: SEP-10 (Stellar Web Authentication)
+        - label: SEP-12 (KYC API)
+        - label: SEP-24 (Interactive deposit/withdraw)
+        - label: SEP-31 (Cross-Border Payments API)
+        - label: SEP-38 (Anchor RFQ / Quotes API)
+  - type: textarea
+    id: assets
+    attributes:
+      label: Supported assets and countries
+      description: Which assets (e.g. USDC, EURC, local fiat) and ISO 3166-1 alpha-2 country codes are served?
+      placeholder: |
+        Assets: USDC, NGN
+        Countries: NG
+    validations:
+      required: false
+  - type: textarea
+    id: additional-notes
+    attributes:
+      label: Additional context
+      description: Any testnet endpoints, public keys, or operational notes.

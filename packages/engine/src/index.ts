@@ -6,6 +6,8 @@ export {
   type EngineDeps,
   type ExecuteOptions,
   type RunResult,
+  type CompletedRateSample,
+  type RateSampleSink,
 } from "./run";
 export { ALL_STATES, canTransition, isTerminal, TERMINAL, type CorridorState } from "./state";
 export {

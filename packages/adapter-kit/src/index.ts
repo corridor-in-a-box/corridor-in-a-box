@@ -274,6 +274,7 @@ export interface TransactionStatus {
    * all undefined.
    */
   readonly amountIn?: Money;
+  readonly amountOut?: Money;
   readonly depositAddress?: string;
   readonly memo?: string;
   readonly memoType?: "text" | "hash" | "id";
@@ -791,6 +792,10 @@ export interface MockAdapterOptions {
   confirmSettlementResult?: Outcome<SettlementRef>;
   /** Deposit instructions for openTransaction to report. */
   instructions?: DepositInstructions;
+  /** Explicit amountIn to report on getTransaction (defaults to quote sourceAmount). */
+  finalAmountIn?: Money;
+  /** Explicit amountOut to report on getTransaction. */
+  finalAmountOut?: Money;
 }
 
 export function createMockAdapter(opts: MockAdapterOptions = {}): AnchorAdapter {
@@ -870,6 +875,8 @@ export function createMockAdapter(opts: MockAdapterOptions = {}): AnchorAdapter 
         settled: opts.settled !== false,
         refunds: opts.refundStatus,
         ...expected,
+        ...(opts.finalAmountIn ? { amountIn: opts.finalAmountIn } : {}),
+        ...(opts.finalAmountOut ? { amountOut: opts.finalAmountOut } : {}),
       });
     },
     async confirmSettlement(transactionId) {

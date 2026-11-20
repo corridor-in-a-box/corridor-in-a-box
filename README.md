@@ -276,6 +276,14 @@ ATTESTER_SECRET=S… pnpm attest             # probe + submit both halves: bitma
 cd contracts && cargo test                 # 68 contract tests
 ```
 
+### Asking to be added to the anchor fleet
+
+Anchors operating on Stellar that want their home domain probed by the automated registry attester can request to join the fleet:
+
+- Open a GitHub issue using the [Add my anchor](.github/ISSUE_TEMPLATE/add_anchor.yml) template.
+- Provide your canonical home domain publishing `/.well-known/stellar.toml` and a verifiable listing source (such as your Stellar Anchor Directory entry or official website).
+- Once submitted, the domain is probed via `pnpm probe:anchor <domain>` and added to `contracts/anchors.json` for regular scheduled attestation.
+
 ## Proof against a real SEP-31 anchor
 
 `scripts/reference-anchor.sh up` stands up the SDF **Anchor Platform reference

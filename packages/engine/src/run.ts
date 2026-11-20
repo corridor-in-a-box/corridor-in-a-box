@@ -162,7 +162,29 @@ export interface EngineDeps {
    * evaluation while recording `gate.skipped` in the audit log and emitting a warning.
    */
   unsafeSkipPreSettleGate?: boolean;
+  /**
+   * Optional sink for rate samples observed during execution (e.g. `source="own_payment"`).
+   * RFC 0004: when a run reaches `completed`, a rate sample is written from its final amounts.
+   */
+  rateHistory?: RateSampleSink;
 }
+
+export interface CompletedRateSample {
+  readonly runId: string;
+  readonly pair: string;
+  readonly rate: string;
+  readonly source: "own_payment";
+  readonly network?: string;
+  readonly sampledAt: number;
+  readonly anchorDomain: string;
+  readonly amountIn: Money;
+  readonly amountOut: Money;
+}
+
+export type RateSampleSink =
+  | { recordSample(sample: CompletedRateSample): void | Promise<void> }
+  | { record(sample: CompletedRateSample): void | Promise<void> }
+  | ((sample: CompletedRateSample) => void | Promise<void>);
 
 export interface RunResult {
   readonly idempotencyKey: string;
@@ -273,6 +295,55 @@ function makeRecordOutcome(
       ...(e && { error: `${e.code}: ${e.message}` }),
     });
   };
+}
+
+async function recordCompletedRateSample(
+  deps: EngineDeps,
+  corridor: Corridor,
+  run: StoredRun,
+  status: TransactionStatus | undefined,
+  now: () => number,
+): Promise<void> {
+  if (!deps.rateHistory || !status) return;
+  const amountIn = status.amountIn;
+  const amountOut = status.amountOut;
+  if (!amountIn || !amountOut) return;
+
+  const inVal = parseFloat(amountIn.amount);
+  const outVal = parseFloat(amountOut.amount);
+  if (!Number.isFinite(inVal) || !Number.isFinite(outVal) || inVal <= 0) return;
+
+  const rate = (outVal / inVal).toFixed(7);
+  const pair = `${amountIn.asset}:${amountOut.asset}`;
+  const anchorDomain = corridor.dest.endpoints.home_domain ?? corridor.id;
+  const network = corridor.settlement.network;
+
+  const sample: CompletedRateSample = {
+    runId: run.idempotencyKey,
+    pair,
+    rate,
+    source: "own_payment",
+    network,
+    sampledAt: now(),
+    anchorDomain,
+    amountIn,
+    amountOut,
+  };
+
+  try {
+    if (typeof deps.rateHistory === "function") {
+      await deps.rateHistory(sample);
+    } else if ("recordSample" in deps.rateHistory) {
+      await deps.rateHistory.recordSample(sample);
+    } else if ("record" in deps.rateHistory) {
+      await deps.rateHistory.record(sample);
+    }
+  } catch (err) {
+    (deps.logger ?? silentLogger).log("warn", "corridor.rate_sample.record_failed", {
+      idempotencyKey: run.idempotencyKey,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 export async function execute(
@@ -641,6 +712,7 @@ export async function execute(
 
   // --- 3b/4. settle + reconcile, with recover() retry loop --------------
   let attempt = 0;
+  let finalStatus: TransactionStatus | undefined;
   for (;;) {
     if (now() >= deadlineMs) {
       return finishFailure({
@@ -857,6 +929,7 @@ export async function execute(
       }),
     );
     if (!r.ok) return finishFailure(r.error);
+    finalStatus = r.value;
     {
       const t = await advance("reconciled");
       if (!t.ok) return die(t.error);
@@ -871,6 +944,7 @@ export async function execute(
   }
   // The one outcome that clears a lane's consecutive-failure count.
   await recordOutcome("completed");
+  await recordCompletedRateSample(deps, corridor, run, finalStatus, now);
   metrics.timing("corridor.duration", now() - startedAt, { corridor: corridor.id });
   return ok(toResult(run, trail));
 }
@@ -1371,6 +1445,7 @@ async function resumeRun(
     return routed;
   }
   const route = routed.value;
+  let finalStatus: TransactionStatus | undefined;
   const context = createRunContext({
     run,
     trail,
@@ -1652,14 +1727,20 @@ async function resumeRun(
       metrics: deps.metrics,
     });
     if (!reconciled.ok) return context.finishFailure(reconciled.error);
+    finalStatus = reconciled.value;
     const advanced = await context.advance("reconciled");
     if (!advanced.ok) return advanced;
   }
 
   if (run.state === "reconciled") {
+    if (!finalStatus && run.transactionId) {
+      const s = await route.receiving.getTransaction(run.transactionId);
+      if (s.ok) finalStatus = s.value;
+    }
     const done = await context.advance("completed");
     if (!done.ok) return done;
     await recordOutcome("completed");
+    await recordCompletedRateSample(deps, corridor, run, finalStatus, now);
     return ok(toResult(run, trail));
   }
 

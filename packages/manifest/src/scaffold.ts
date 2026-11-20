@@ -159,3 +159,134 @@ export function manifestFromProbe(
 
   return stringifyYaml(manifestObj);
 }
+
+export interface AttestedAnchorData {
+  readonly domain: string;
+  readonly seps: readonly number[];
+  readonly probesRun: readonly string[];
+  readonly probesPassed: readonly string[];
+  readonly tomlHash?: string;
+  readonly attestedLedger?: number;
+  readonly receiveAssets?: readonly string[];
+  readonly country?: string;
+}
+
+export interface ManifestFromAttestationOptions {
+  /** Source asset name/code. Default "USDC". */
+  readonly sourceAsset?: string;
+  /** Network: "public" | "testnet". Default "public". */
+  readonly network?: "public" | "testnet";
+  /** Allow scaffolding when SEP-31 is not attested. */
+  readonly allowNotRunnable?: boolean;
+  /** Override today's date (YYYY-MM-DD) for deterministic testing. */
+  readonly today?: string;
+  /** Explicit dest asset. */
+  readonly destAsset?: string;
+}
+
+/**
+ * Scaffolds a draft corridor manifest from on-chain anchor attestation facts.
+ * Fills verified facts (domain, country, receive assets, attested date), leaving unverified
+ * endpoint URLs and credentials as clearly marked TODOs that deliberately fail manifest validation.
+ */
+export function manifestFromAttestation(
+  attestation: AttestedAnchorData,
+  opts: ManifestFromAttestationOptions = {},
+): string {
+  const sep31Passed =
+    attestation.seps.includes(31) && attestation.probesPassed.includes("sep31_info");
+
+  if (!sep31Passed && !opts.allowNotRunnable) {
+    throw new Error(
+      `anchor "${attestation.domain}" does not attest serving SEP-31 (requires SEP-31 advertised and sep31_info probe passed). Re-run with --allow-not-runnable to scaffold anyway.`,
+    );
+  }
+
+  const sourceAsset = opts.sourceAsset ?? "USDC";
+  const network = opts.network ?? "public";
+
+  const cleanId = attestation.domain
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+
+  const receiveAssets = attestation.receiveAssets ?? [];
+  let destAsset = opts.destAsset;
+  if (!destAsset) {
+    const iso = receiveAssets.find((a) => /^iso4217:/i.test(a));
+    if (iso) {
+      destAsset = iso;
+    } else if (receiveAssets.length > 0) {
+      destAsset = receiveAssets[0]!;
+    } else {
+      destAsset = "TODO: specify destination asset (e.g. iso4217:EUR)";
+    }
+  }
+
+  let destCurrencyCode = "DEST";
+  if (destAsset.startsWith("iso4217:")) {
+    destCurrencyCode = destAsset.slice("iso4217:".length).toUpperCase();
+  }
+
+  const sourceCurrencyCode = sourceAsset === "USDC" ? "USD" : sourceAsset;
+  const path = [sourceCurrencyCode, sourceAsset, destCurrencyCode];
+
+  const asset_issuer =
+    network === "testnet"
+      ? "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+      : "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+
+  const quote_source = attestation.probesPassed.includes("sep38_quote") ? "sep38" : "external";
+
+  const destJurisdiction =
+    attestation.country ??
+    (destCurrencyCode !== "DEST" ? destCurrencyCode.slice(0, 2).toUpperCase() : "US");
+
+  const manifestObj: Record<string, unknown> = {
+    id: cleanId,
+    status_note: `Draft scaffolded from on-chain attestation for ${attestation.domain} at ledger ${attestation.attestedLedger ?? "unknown"}. Verify TODOs before running.`,
+    source: {
+      name: `TODO: ${sourceCurrencyCode} Sending Anchor`,
+      asset: sourceAsset,
+      endpoints: {
+        home_domain: "TODO: sending-anchor.example",
+      },
+    },
+    dest: {
+      name: `${attestation.domain} Receiving Anchor`,
+      asset: destAsset,
+      protocol: "sep31",
+      endpoints: {
+        home_domain: attestation.domain,
+        transfer_server_sep31: "[TODO: enter transfer_server_sep31 endpoint URL]",
+        web_auth: attestation.probesPassed.includes("sep10_auth")
+          ? "[TODO: enter web_auth endpoint URL]"
+          : undefined,
+      },
+    },
+    fx: {
+      path,
+      quote_source,
+      who_holds_risk: "receiving_anchor",
+      quote_ttl_seconds: 60,
+    },
+    compliance: {
+      source_jurisdiction: "US",
+      dest_jurisdiction: destJurisdiction,
+      travel_rule_profile: "default",
+    },
+    settlement: {
+      bridge_asset: "USDC",
+      network,
+      anchor_domain: attestation.domain,
+      asset_issuer,
+    },
+    recovery: {
+      max_retries: 3,
+      timeout_seconds: 900,
+      rollback: "refund_sender",
+    },
+  };
+
+  return stringifyYaml(manifestObj);
+}

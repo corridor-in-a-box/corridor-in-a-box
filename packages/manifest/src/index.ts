@@ -546,4 +546,10 @@ export const manifestHash = hashCorridor;
 // checked. Both the CLI and the web dashboard read it, so neither can report a
 // corridor as healthy on its own authority.
 export { liveness, LIVENESS_LABEL, type Liveness, type LivenessState } from "./liveness";
-export { manifestFromProbe, type ManifestFromProbeOptions } from "./scaffold";
+export {
+  manifestFromProbe,
+  manifestFromAttestation,
+  type ManifestFromProbeOptions,
+  type ManifestFromAttestationOptions,
+  type AttestedAnchorData,
+} from "./scaffold";
