@@ -144,6 +144,42 @@ and is the only state that may re-enter \`verifying\`. \`recovering\` and
 `,
   },
   {
+    slug: "route-planner",
+    title: "Route planner",
+    description: "How routes are evaluated, ranked, and chosen.",
+    body: `# Route planner: how a route is chosen
+
+\`corridor-in-a-box\` delegates receiving anchor selection to a **Route Planner**
+behind the \`RouteResolver\` seam. This page explains in plain words how a route is
+chosen for a payment.
+
+## The six evaluation steps
+
+1. **Candidate gathering:** Match the \`PaymentIntent\` against available corridor manifests.
+2. **Attestation gating:** Check the on-chain Soroban registry: does the anchor actively serve the declared protocol (\`sep31\` or \`sep6\`), is the attestation within the staleness bound (~1 week), and does the live TOML hash match? Fail closed if unattested.
+3. **Liveness & safety:** Exclude halted corridors (circuit breaker tripped after consecutive failures) and verify limits.
+4. **Ranking:** Sort candidates by proof tier (\`proven\` > \`verified\` > \`unverified\`), freshness, health, and pricing.
+5. **Decision:** Form an immutable \`RouteDecision\` with the receiving adapter and trust mode (\`"attested"\` or \`"manifest"\`).
+6. **Fallback:** If the primary route fails, fall back to the next qualified candidate without weakening trust. Never silently downgrade to an unverified lane.
+
+## The three labels
+
+| Label | Meaning | Runnable? |
+|---|---|---|
+| **\`proven\`** | Real canary payment completed through this lane within \`max_age_days\` (default 30) with on-chain hashes. | Yes |
+| **\`verified\`** | Endpoints verified against published \`stellar.toml\` and on-chain attestation active. | Yes |
+| **\`unverified\`** | Declared in manifest but unconfirmed. Fails closed by default. | No |
+
+## Route types in plain words
+
+- **SEP-31:** Direct anchor-to-anchor transfer standard for B2B remittances. Fully programmatic and unattended.
+- **SEP-6:** Programmatic deposit/withdraw. *The third-party caveat:* SEP-6 was designed for retail users; operators must verify that the anchor permits unattended third-party settlement without browser sessions.
+- **Wallets:** Non-custodial client apps (e.g. Vibrant). They are clients, not anchors, and cannot receive or settle corridors.
+
+See the complete guide in \`docs/route-planner.md\` and \`docs/rfcs/0004-smart-router.md\`.
+`,
+  },
+  {
     slug: "http-api",
     title: "HTTP API",
     description: "The @corridor/service endpoints.",

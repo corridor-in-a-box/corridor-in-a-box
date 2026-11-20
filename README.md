@@ -92,8 +92,9 @@ corridors/       the manifests — ALL corridor-specifics live here,
 contracts/       Soroban registry + attester contracts
 scripts/         reference-anchor.sh, assert-testnet-corridor.ts, the
                  corridor catalog, adapter scaffold and release checks
-docs/            threat model, key management, bespoke adapters,
-                 "why not Anchor Platform", SEP coverage, operations, …
+docs/            route planner guide, threat model, key management,
+                 bespoke adapters, "why not Anchor Platform", SEP coverage,
+                 operations, …
 examples/        runnable end-to-end demos, the service launcher and a
                  scriptable mock anchor (`pnpm mock:anchor`)
 ```
@@ -110,10 +111,12 @@ Three boundaries do the work:
    in this repo.
 3. **router seam** — the open repo ships the `RouteResolver` interface plus two
    resolvers: `StaticRouteResolver` (trust the manifest) and
-   `RegistryRouteResolver` (require a fresh on-chain attestation). A
-   health-/rate-weighted resolver could be supplied separately; it is not
-   included or injected by this repo. The interface is the seam for that
-   possible future component.
+   `RegistryRouteResolver` (require a fresh on-chain attestation). See
+   [docs/route-planner.md](./docs/route-planner.md) for how routes are evaluated,
+   ranked, and resolved, and [docs/route-resolver.md](./docs/route-resolver.md)
+   for the module loader contract. A health-/rate-weighted resolver could be
+   supplied separately; it is not included or injected by this repo. The
+   interface is the seam for that possible future component.
 
 ## Corridor sequencing
 
