@@ -7,6 +7,22 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
+### Added — configurable failure injection for the reference anchor ([#678](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/678))
+
+- `scripts/reference-anchor.sh faults <spec>` makes the local Anchor Platform
+  reference stack misbehave on demand: `delay=N` holds the payout, `reject`
+  fails the transaction, `ask-info` parks it in `pending_customer_info_update`,
+  `refund` reports the full refund SEP-31 allows, and `quote-expiry=N` issues
+  quotes that expire in `N` seconds. It plays the anchor's business server (the
+  platform API, or the status the platform reads back) instead of forking the
+  platform, and targets the next payment opened after it is armed — or one pinned
+  with `FAULT_TX_ID` and/or selected by amount with `FAULT_AMOUNT`.
+- `pnpm verify:corridor` accepts `EXPECT_STATE`, so a fault scenario asserts the
+  terminal state the engine should reach (for example `refunded`) instead of
+  requiring `completed`.
+- `docs/operations.md` documents every fault, how it is applied, and the expected
+  engine outcome for each.
+
 ### Fixed — stale documentation and comments
 
 - Docs said no transition enters `refund_pending` and that `refunded` is reachable only when
