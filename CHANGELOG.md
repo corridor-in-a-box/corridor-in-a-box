@@ -7,6 +7,22 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
+### Added — Rate history schema and migrations ([#589](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/589))
+
+- Postgres schema and migrations for rate samples written by collector jobs and read by the planner.
+- Table `rate_samples` with exact numeric rates, composite indices on `(pair, network, sampled_at)` and `(sell_asset, buy_asset, network, sampled_at)`.
+- Exported `PostgresRateHistoryStore` and table definitions from `@corridor/engine`.
+
+### Added — Latin America anchor fleet expansion ([#665](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/665))
+
+- Added five Latin American anchors from the Stellar Anchor Directory to `contracts/anchors.json`: `ntokens.com` (Brazil), `pubnet-sep.latamex.com` (Argentina/Brazil), `etherfuse.com` (Mexico), `amero.exchange` (Mexico/LatAm), and `ripio.com` (Argentina/LatAm).
+- Probed and documented capabilities for each anchor with `pnpm probe:anchor`.
+
+### Added — Dashboard filters for SEP, asset, and country ([#668](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/668))
+
+- Added responsive client-side filtering on the web dashboard by advertised/served SEP, received assets, declared country, and domain search.
+- Filter state is persisted in URL search parameters (`?sep=...&asset=...&country=...&q=...`).
+
 ### Fixed — stale documentation and comments
 
 - Docs said no transition enters `refund_pending` and that `refunded` is reachable only when

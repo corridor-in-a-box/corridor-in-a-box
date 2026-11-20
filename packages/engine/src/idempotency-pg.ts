@@ -20,6 +20,8 @@ import type { CorridorState } from "./state";
 import { CREATE_BREAKERS_TABLE_SQL, BREAKERS_MIGRATION_SQL } from "./breaker-pg";
 // Same arrangement for the audit table: audit-pg imports only types from here.
 import { CREATE_AUDIT_TABLE_SQL } from "./audit-pg";
+// Rate samples table for historical pricing and router estimation (RFC 0004 / #589).
+import { CREATE_RATE_SAMPLES_TABLE_SQL, RATE_SAMPLES_INDEX_SQL } from "./rate-samples-pg";
 
 export interface QueryResult<R = Record<string, unknown>> {
   rows: R[];
@@ -104,6 +106,9 @@ export async function migrate(db: Queryable): Promise<void> {
   // The append-only audit trail (audit-pg.ts) ships from the same entry point,
   // so a deployment cannot end up with runs but no audit table.
   await db.query(CREATE_AUDIT_TABLE_SQL);
+  // Historical rate samples table (RFC 0004 / #589). Idempotent create and index.
+  await db.query(CREATE_RATE_SAMPLES_TABLE_SQL);
+  for (const sql of RATE_SAMPLES_INDEX_SQL) await db.query(sql);
   // The circuit-breaker table ships from the same entry point on purpose. It is
   // one more `create table if not exists`, so a deployment that has not run
   // migrate() since upgrading would get breaker errors on every payment — the

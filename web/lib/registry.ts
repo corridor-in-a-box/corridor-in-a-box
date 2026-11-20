@@ -15,6 +15,8 @@
 
 import { Contract, rpc, scValToNative, TransactionBuilder, Account, nativeToScVal } from "@stellar/stellar-sdk";
 import deployments from "../../contracts/deployments.json";
+import anchorsData from "../../contracts/anchors.json";
+import { corridors } from "./corridors";
 
 /** SEP numbers in the registry's bit order. Mirrors SEP_NUMBERS in the contract. */
 export const SEP_NUMBERS = [1, 6, 10, 12, 24, 31, 38] as const;
@@ -44,6 +46,9 @@ export interface AnchorAttestation {
   staleness: number;
   /** Advertises SEP-31 AND passed the SEP-31 probe. Not the same as advertising it. */
   servesSep31: boolean;
+  receiveAssets?: string[];
+  country?: string;
+  countries?: string[];
 }
 
 const NULL_ACCOUNT = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
@@ -138,6 +143,41 @@ export async function fetchAttestations(): Promise<{
           read<boolean>("serves_sep31", [str(domain)]),
           read<number>("staleness", [str(domain)]),
         ]);
+
+        let metaReceiveAssets: string[] | undefined;
+        let metaCountry: string | undefined;
+        try {
+          const rawMeta = await read<{
+            domain: string;
+            receive_assets: string[];
+            country?: string | null;
+            attested_ledger: number;
+            attester: string;
+          }>("get_meta", [str(domain)]);
+          if (rawMeta) {
+            metaReceiveAssets = rawMeta.receive_assets;
+            if (rawMeta.country) metaCountry = rawMeta.country;
+          }
+        } catch {
+          // get_meta is optional or not present on older contracts
+        }
+
+        const anchorEntry = (
+          anchorsData.anchors as Array<{ domain: string; countries?: string[] }>
+        ).find((a) => a.domain === domain);
+        const declaredCountries = anchorEntry?.countries ?? [];
+        const corridorAssets = corridors
+          .filter((c) => c.dest?.endpoints?.home_domain === domain && c.dest?.asset)
+          .map((c) => c.dest.asset.replace(/^iso4217:/, ""));
+
+        const allAssets = Array.from(
+          new Set([...(metaReceiveAssets ?? []), ...corridorAssets]),
+        ).filter(Boolean);
+
+        const allCountries = Array.from(
+          new Set([...(metaCountry ? [metaCountry] : []), ...declaredCountries]),
+        ).filter(Boolean);
+
         return {
           domain: raw.domain,
           seps: decode(raw.seps, SEP_NUMBERS) as number[],
@@ -148,6 +188,9 @@ export async function fetchAttestations(): Promise<{
           attester: raw.attester,
           staleness,
           servesSep31,
+          receiveAssets: allAssets.length > 0 ? allAssets : undefined,
+          country: metaCountry ?? declaredCountries[0] ?? undefined,
+          countries: allCountries.length > 0 ? allCountries : undefined,
         } satisfies AnchorAttestation;
       }),
     );

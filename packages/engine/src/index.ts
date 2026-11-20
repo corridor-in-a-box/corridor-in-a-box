@@ -46,6 +46,14 @@ export {
   BREAKERS_MIGRATION_SQL,
 } from "./breaker-pg";
 export {
+  CREATE_RATE_SAMPLES_TABLE_SQL,
+  RATE_SAMPLES_INDEX_SQL,
+  PostgresRateHistoryStore,
+  type RateSampleRecord,
+  type RateSampleSource,
+  type ListRateSamplesFilter,
+} from "./rate-samples-pg";
+export {
   UnimplementedSubmitter,
   createMockSubmitter,
   StellarPaymentStrategy,
