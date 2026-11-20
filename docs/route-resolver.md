@@ -83,6 +83,60 @@ it is set, its weights should sum to 1, so the field keeps its meaning when the
 engine starts to honour it. That support will come as its own change, with a
 changelog entry.
 
+### Recording the choice
+
+A resolver can explain its choice by returning an optional `ranking`:
+
+```ts
+return {
+  receiving: anchorX,
+  trust: "attested",
+  ranking: {
+    chosen: "anchor-x",
+    options: [
+      {
+        id: "anchor-x",
+        label: "Anchor X (MXN, SPEI)",
+        rank: 1,
+        reasons: ["attested 2h ago", "lowest total fee 0.45%"],
+      },
+      { id: "anchor-y", label: "Anchor Y", rank: 2, reasons: ["fee 0.60%"] },
+    ],
+  },
+};
+```
+
+The engine records it once, on the run's first transition out of `created`
+(including when that transition is to `failed`), as the audit entry's `route`
+field:
+
+```json
+{
+  "route": {
+    "chosen": { "id": "anchor-x", "label": "Anchor X (MXN, SPEI)", "rank": 1 },
+    "top": [
+      {
+        "id": "anchor-x",
+        "label": "Anchor X (MXN, SPEI)",
+        "rank": 1,
+        "reasons": ["attested 2h ago", "lowest total fee 0.45%"]
+      },
+      { "id": "anchor-y", "label": "Anchor Y", "rank": 2, "reasons": ["fee 0.60%"] }
+    ]
+  }
+}
+```
+
+- `top` holds at most three options, best rank first; ties keep the resolver's order.
+- Each option keeps at most five reasons, and every string is capped at 200
+  characters. Reasons go into the append-only trail, so keep them PII-free.
+- Without a `ranking`, or when `chosen` matches no option, the receiving
+  adapter's `name` is recorded as the single rank-1 option.
+- `PostgresAuditSink` stores `route` in the `detail` jsonb column; `listAudit()`
+  returns it unchanged. A resumed run that has already left `created` does not
+  record it again.
+- A resolver that throws (`ROUTE_REFUSED`) records no `route`.
+
 ### Versioning and stability
 
 - The factory contract is versioned by `ROUTE_RESOLVER_API_VERSION` (currently

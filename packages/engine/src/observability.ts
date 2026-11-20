@@ -103,6 +103,27 @@ export interface AuditEntry extends LogFields {
    * `failed`, or `recovering` on the way to `held`).
    */
   readonly checks?: readonly CheckResult[];
+  /**
+   * The routing choice: which option the resolver chose, its label and rank,
+   * and the reasons of the top three options. Recorded once, on the run's
+   * first transition out of `created`.
+   */
+  readonly route?: RouteChoice;
+}
+
+/** An option as recorded in the audit trail. */
+export interface RouteChoiceOption {
+  readonly id: string;
+  readonly label: string;
+  readonly rank: number;
+  readonly reasons: readonly string[];
+}
+
+/** Why a payment went through the anchor it did, as recorded in the audit trail. */
+export interface RouteChoice {
+  readonly chosen: { readonly id: string; readonly label: string; readonly rank: number };
+  /** Up to three options, best rank first. */
+  readonly top: readonly RouteChoiceOption[];
 }
 
 /** Verification decision recorded before the engine claims an idempotency key. */
