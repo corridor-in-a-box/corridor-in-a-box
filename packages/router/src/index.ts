@@ -98,3 +98,10 @@ export {
 
 export { createAdapterRegistry } from "./adapters";
 export type { AdapterFactory, AdapterRegistry } from "./adapters";
+
+export {
+  DEFAULT_ESTIMATE_MARGIN_BPS,
+  applyEstimateMargin,
+  fetchIndicativePrice,
+} from "./indicative-price";
+export type { IndicativePriceRequest, IndicativeRouteOption } from "./indicative-price";
