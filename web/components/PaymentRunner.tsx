@@ -66,6 +66,10 @@ export function PaymentRunner({ initialCorridor }: { initialCorridor?: string })
     // try/finally: without it, a network error or a non-JSON response threw out
     // of this function with `running` still true — spinner stuck forever, Run
     // button permanently disabled, only a page reload recovers.
+    // `answered`: the server replied with an error body past request validation
+    // (400), so the engine may have stored the run (a proxied service failure); the
+    // timeline polls once more and hides itself if the run does not exist.
+    let answered = false;
     try {
       const res = await fetch("/api/payments", {
         method: "POST",
@@ -91,6 +95,7 @@ export function PaymentRunner({ initialCorridor }: { initialCorridor?: string })
           (outcome as unknown as { message?: string; error?: string })?.message ??
           (outcome as unknown as { error?: string })?.error ??
           `request failed (HTTP ${res.status})`;
+        answered = res.status !== 400;
         throw new Error(message);
       }
       setWatched((prev) =>
@@ -115,7 +120,7 @@ export function PaymentRunner({ initialCorridor }: { initialCorridor?: string })
       }
       setResult(outcome);
     } catch (e) {
-      setWatched(null);
+      setWatched((prev) => (answered && prev ? { ...prev, submitting: false } : null));
       setResult({
         ok: false,
         state: "failed",
@@ -267,15 +272,13 @@ export function PaymentRunner({ initialCorridor }: { initialCorridor?: string })
 
       <div className="flex flex-col gap-6">
       {watched && (
-        <Card>
-          <PaymentTimeline
-            key={watched.run}
-            idempotencyKey={watched.key}
-            submitting={watched.submitting}
-            trail={watched.trail}
-            result={watched.result}
-          />
-        </Card>
+        <PaymentTimeline
+          key={watched.run}
+          idempotencyKey={watched.key}
+          submitting={watched.submitting}
+          trail={watched.trail}
+          result={watched.result}
+        />
       )}
 
       {/* Trail */}

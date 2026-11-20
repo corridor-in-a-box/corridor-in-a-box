@@ -3,6 +3,7 @@
 import { useEffect, useId, useState } from "react";
 import { ExternalLink } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
+import { Card } from "@/components/ui/Card";
 import { isTxHash, txUrl } from "@/lib/explorer";
 import {
   OUTCOME_TEXT,
@@ -42,6 +43,7 @@ const DOT: Record<TimelineStepStatus, string> = {
  * come from the POST response once it lands: the trail says how far a failed run
  * got, which its status alone does not, and the result is the outcome to show
  * if the status endpoint cannot see the run (another server instance's memory).
+ * Once nothing is pending and the endpoint has no such run, it renders nothing.
  * Remount it (change its `key`) to watch another run.
  */
 export function PaymentTimeline({
@@ -60,6 +62,7 @@ export function PaymentTimeline({
   const [polled, setPolled] = useState<PaymentStatusLike | null>(null);
   const [polledProgress, setPolledProgress] = useState(0);
   const [pollError, setPollError] = useState<string | null>(null);
+  const [missing, setMissing] = useState(false);
   const headingId = useId();
 
   const polledFinal = polled !== null && isFinalState(polled.state);
@@ -83,7 +86,10 @@ export function PaymentTimeline({
         };
         if (res.ok && typeof body.state === "string") {
           next = { ...body, state: body.state };
-        } else if (!(submitting && res.status === 404)) {
+        } else if (res.status === 404 && !submitting) {
+          retry = false;
+          if (!cancelled) setMissing(true);
+        } else if (res.status !== 404) {
           retry = res.status >= 500;
           if (!cancelled) setPollError(body.error ?? `status request failed (HTTP ${res.status})`);
         }
@@ -94,6 +100,7 @@ export function PaymentTimeline({
       if (next) {
         const seen = next;
         setPollError(null);
+        setMissing(false);
         setPolled(seen);
         setPolledProgress((prev) => advance(prev, seen));
         retry = !isFinalState(seen.state);
@@ -119,106 +126,110 @@ export function PaymentTimeline({
   const steps = timelineSteps(progress, state);
   const hash = status?.stellarTxHash;
 
+  if (missing && !status) return null;
+
   return (
-    <section aria-labelledby={headingId} className="flex flex-col gap-4">
-      <div className="flex items-center justify-between gap-2">
-        <h2 id={headingId} className="font-semibold">
-          Payment progress
-        </h2>
-        <Badge variant={BADGE[outcome]}>{status ? state : "waiting"}</Badge>
-      </div>
+    <Card>
+      <section aria-labelledby={headingId} className="flex flex-col gap-4">
+        <div className="flex items-center justify-between gap-2">
+          <h2 id={headingId} className="font-semibold">
+            Payment progress
+          </h2>
+          <Badge variant={BADGE[outcome]}>{status ? state : "waiting"}</Badge>
+        </div>
 
-      <output aria-live="polite" aria-atomic="true" className="sr-only">
-        {status ? `${OUTCOME_TEXT[outcome]}.` : ""}
-      </output>
+        <output aria-live="polite" aria-atomic="true" className="sr-only">
+          {status ? `${OUTCOME_TEXT[outcome]}.` : ""}
+        </output>
 
-      <ol className="flex items-start">
-        {steps.map(({ step, status: stepStatus }, i) => (
-          <li key={step} className="flex flex-1 flex-col items-center gap-1.5 text-center">
-            <div className="flex w-full items-center">
+        <ol className="flex items-start">
+          {steps.map(({ step, status: stepStatus }, i) => (
+            <li key={step} className="flex flex-1 flex-col items-center gap-1.5 text-center">
+              <div className="flex w-full items-center">
+                <span
+                  aria-hidden="true"
+                  className={
+                    "h-0.5 flex-1 " +
+                    (i === 0 ? "invisible" : stepStatus === "pending" ? "bg-border" : "bg-blue-600")
+                  }
+                />
+                <span
+                  aria-hidden="true"
+                  className={
+                    "flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold " +
+                    DOT[stepStatus]
+                  }
+                >
+                  {stepStatus === "done" ? "✓" : stepStatus === "stopped" ? "!" : i + 1}
+                </span>
+                <span
+                  aria-hidden="true"
+                  className={
+                    "h-0.5 flex-1 " +
+                    (i === steps.length - 1
+                      ? "invisible"
+                      : steps[i + 1].status === "pending"
+                        ? "bg-border"
+                        : "bg-blue-600")
+                  }
+                />
+              </div>
               <span
-                aria-hidden="true"
                 className={
-                  "h-0.5 flex-1 " +
-                  (i === 0 ? "invisible" : stepStatus === "pending" ? "bg-border" : "bg-blue-600")
-                }
-              />
-              <span
-                aria-hidden="true"
-                className={
-                  "flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold " +
-                  DOT[stepStatus]
+                  "font-mono text-xs " +
+                  (stepStatus === "pending" ? "text-secondary-text" : "font-medium")
                 }
               >
-                {stepStatus === "done" ? "✓" : stepStatus === "stopped" ? "!" : i + 1}
+                {step}
               </span>
-              <span
-                aria-hidden="true"
-                className={
-                  "h-0.5 flex-1 " +
-                  (i === steps.length - 1
-                    ? "invisible"
-                    : steps[i + 1].status === "pending"
-                      ? "bg-border"
-                      : "bg-blue-600")
-                }
-              />
-            </div>
-            <span
-              className={
-                "font-mono text-xs " +
-                (stepStatus === "pending" ? "text-secondary-text" : "font-medium")
-              }
-            >
-              {step}
-            </span>
-            <span className="sr-only">: {STEP_TEXT[stepStatus]}</span>
-          </li>
-        ))}
-      </ol>
+              <span className="sr-only">: {STEP_TEXT[stepStatus]}</span>
+            </li>
+          ))}
+        </ol>
 
-      {outcome !== "in_progress" && outcome !== "completed" && (
-        <div
-          className={
-            "rounded-lg border px-3 py-2 text-sm " +
-            (outcome === "failed"
-              ? "border-red-200 bg-red-50 text-red-800 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300"
-              : "border-yellow-200 bg-yellow-50 text-yellow-800 dark:border-yellow-900/40 dark:bg-yellow-900/20 dark:text-yellow-300")
-          }
-        >
-          <span className="font-semibold">{OUTCOME_TEXT[outcome]}</span>
-          {status?.error && (
-            <>
-              {" — "}
-              <span className="font-mono">{status.error}</span>
-            </>
-          )}
-        </div>
-      )}
+        {outcome !== "in_progress" && outcome !== "completed" && (
+          <div
+            className={
+              "rounded-lg border px-3 py-2 text-sm " +
+              (outcome === "failed"
+                ? "border-red-200 bg-red-50 text-red-800 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300"
+                : "border-yellow-200 bg-yellow-50 text-yellow-800 dark:border-yellow-900/40 dark:bg-yellow-900/20 dark:text-yellow-300")
+            }
+          >
+            <span className="font-semibold">{OUTCOME_TEXT[outcome]}</span>
+            {status?.error && (
+              <>
+                {" — "}
+                <span className="font-mono">{status.error}</span>
+              </>
+            )}
+          </div>
+        )}
 
-      {hash && (
-        <div className="rounded-lg bg-bg-subtle px-3 py-2 text-xs">
-          <span className="text-secondary-text">settlement tx: </span>
-          {isTxHash(hash) ? (
-            <a
-              href={txUrl(network, hash)}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 font-mono break-all underline"
-            >
-              {hash}
-              <ExternalLink size={12} aria-hidden="true" />
-              <span className="sr-only">(opens stellar.expert in a new tab)</span>
-            </a>
-          ) : (
-            <span className="font-mono break-all">{hash}</span>
-          )}
-        </div>
-      )}
+        {hash && (
+          <div className="rounded-lg bg-bg-subtle px-3 py-2 text-xs">
+            <span className="text-secondary-text">settlement tx: </span>
+            {isTxHash(hash) ? (
+              <a
+                href={txUrl(network, hash)}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 font-mono break-all underline"
+              >
+                {hash}
+                <ExternalLink size={12} aria-hidden="true" />
+                <span className="sr-only">(opens stellar.expert in a new tab)</span>
+              </a>
+            ) : (
+              <span className="font-mono break-all">{hash}</span>
+            )}
+          </div>
+        )}
 
-      {pollError && (
-        <p className="text-xs text-red-700 dark:text-red-400">Status unavailable: {pollError}</p>
-      )}
-    </section>
+        {pollError && (
+          <p className="text-xs text-red-700 dark:text-red-400">Status unavailable: {pollError}</p>
+        )}
+      </section>
+    </Card>
   );
 }
