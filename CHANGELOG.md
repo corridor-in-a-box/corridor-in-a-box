@@ -7,6 +7,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
+### Added — a custody statement ([#707](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/707))
+
+- `docs/custody.md` says in one place that the project never holds funds or a key that can
+  move them: who holds the money at each step of a payment, the one key on the money path and
+  who holds it, what the project does and does not do, and the keys it does hold (attester,
+  registry admin, testnet CI seeds), none of which can move money. Linked from the README.
+
 ### Fixed — stale documentation and comments
 
 - Docs said no transition enters `refund_pending` and that `refunded` is reachable only when

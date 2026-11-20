@@ -34,6 +34,11 @@ Everything in this repo is publishable as-is.
 > optional, separate on-chain oracle for publishing corridor data — never as part
 > of moving money.
 
+**Custody.** The project never holds your funds, or a key that can move them. Each
+business runs the engine against its own account with its own signer. Who holds the
+money at each step, and what the project does and does not do, is in
+[docs/custody.md](./docs/custody.md).
+
 ## Quickstart
 
 ```bash
