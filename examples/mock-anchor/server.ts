@@ -60,6 +60,11 @@ export interface MockAnchorOptions {
   receiveAfterPolls?: number;
   /** Polls spent in `pending_external` by `slow_pending_external`. Default 5. */
   slowPolls?: number;
+  /**
+   * Flat SEP-38 fee, in the sell asset, taken off every quote's buy amount, so
+   * several mock anchors can quote the same lane differently. Default `0.00`.
+   */
+  quoteFee?: string;
 }
 
 interface Tx {
@@ -271,16 +276,20 @@ export async function startMockAnchor(opts: MockAnchorOptions = {}): Promise<Moc
       const sell = String(body.sell_amount ?? "");
       if (!/^\d+(\.\d+)?$/.test(sell)) return send(res, 400, { error: "bad sell_amount" });
       const expires = Date.now() + (scenario === "quote_expired" ? -1_000 : 60_000);
+      const fee = opts.quoteFee ?? "0.00";
+      const buy = opts.quoteFee ? (Number(sell) - Number(fee)).toFixed(2) : sell;
+      if (Number(buy) <= 0)
+        return send(res, 400, { error: "sell_amount does not cover the fee" });
       return send(res, 201, {
         id: `quote-${randomUUID()}`,
         price: "1.00",
-        total_price: "1.00",
+        total_price: opts.quoteFee ? (Number(sell) / Number(buy)).toFixed(7) : "1.00",
         expires_at: new Date(expires).toISOString(),
         sell_asset: body.sell_asset,
         buy_asset: body.buy_asset,
         sell_amount: sell,
-        buy_amount: sell,
-        fee: { total: "0.00", asset: String(body.sell_asset ?? "") },
+        buy_amount: buy,
+        fee: { total: fee, asset: String(body.sell_asset ?? "") },
       });
     }
 
