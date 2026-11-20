@@ -67,9 +67,9 @@ pnpm install
 pnpm dev   # http://localhost:3000
 \`\`\`
 
-The **Run a payment** page drives a simulation of the engine's state machine (a
-re-implementation; it can drift). Set \`CORRIDOR_SERVICE_URL\` to drive a real
-\`@corridor/service\`.
+The **Run a payment** page runs the real \`@corridor/engine\` with mock anchor
+and settlement adapters, so no funds move and nothing touches the network. Set
+\`CORRIDOR_SERVICE_URL\` to drive a real \`@corridor/service\`.
 `,
   },
   {

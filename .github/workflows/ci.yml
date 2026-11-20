@@ -27,6 +27,31 @@ jobs:
           tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP" gitleaks
           "$RUNNER_TEMP/gitleaks" git --config .gitleaks.toml --redact --no-banner .
 
+  # Checks markdown links on PRs modifying docs or on main pushes.
+  link-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Check for markdown changes on PR
+        id: filter
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            if git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -q '\.md$'; then
+              echo "changed=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "changed=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Run lychee link checker
+        if: steps.filter.outputs.changed == 'true'
+        uses: lycheeverse/lychee-action@649b0e4890508ea3e11ea6b3ee35ce899a25afd5 # v2.3.0
+        with:
+          args: --config .lychee.toml "**/*.md"
+
   # The Soroban contracts are a separate toolchain from the TypeScript monorepo,
   # so they get their own job: fmt, clippy-as-errors, the full test suite, and a
   # real wasm build. The wasm build matters — a contract that compiles natively

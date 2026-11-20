@@ -7,6 +7,28 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
+### Added — show latest real testnet payment on dashboard ([#586](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/586))
+
+- Added a live "Latest real payment" panel to the dashboard that fetches the latest nightly `reference-corridor.yml` run from the unauthenticated GitHub REST API and the latest USDC settle payment into the reference anchor receiving account from Horizon testnet.
+- Added data-fetching helpers in `web/lib/latest-run.ts`, component `web/components/LatestRealRun.tsx`, and unit tests in `tests/latest-run.test.ts`.
+
+### Fixed — walkthrough documentation and automated markdown link checking ([#587](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/587))
+
+- Clarified documentation across `README.md`, `web/app/payments/page.tsx`, and `web/lib/docs.ts` that the walkthrough runs the real `@corridor/engine` with mock adapters rather than being a state-machine re-implementation.
+- Fixed 404 claimable balance link in `docs/claimable-balance-settlement-spike.md` by linking the creating operation.
+- Added automated lychee markdown link checker in `.github/workflows/ci.yml` and `.lychee.toml` with comments explaining exclusions.
+
+### Added — design note: public on-chain lane records ([#643](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/643))
+
+- Added `docs/public-lane-records.md` and `docs/rfcs/0004-smart-router.md` detailing the Soroban contract shape, receiver cryptographic proof of domain control via SEP-10 ed25519 signatures, lease-based TTL and revocation, and partner graph privacy trade-offs.
+- Reviewed and updated `docs/threat-model.md` to incorporate public lane records.
+
+### Added — nightly reference corridor runs at three amounts ([#679](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/679))
+
+- Added `limits` (`min_amount: "1.00"`, `max_amount: "25.00"`) to `corridors/reference.corridor.yaml`.
+- Updated `.github/workflows/reference-corridor.yml` to execute the corridor at small (1.00), typical (10.00), and near-maximum (25.00) amounts.
+- Updated `examples/verify-corridor.ts` to record each result into the GitHub job summary table.
+
 ### Fixed — stale documentation and comments
 
 - Docs said no transition enters `refund_pending` and that `refunded` is reachable only when

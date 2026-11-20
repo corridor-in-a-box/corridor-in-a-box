@@ -55,6 +55,10 @@
       "breaker": {
         "consecutive_failures": 3
       }
+    },
+    "limits": {
+      "min_amount": "1.00",
+      "max_amount": "25.00"
     }
   },
   {

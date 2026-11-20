@@ -28,6 +28,10 @@ fx:
   who_holds_risk: receiving_anchor
   quote_ttl_seconds: 60
 
+limits:
+  min_amount: "1.00"
+  max_amount: "25.00"
+
 compliance:
   source_jurisdiction: US
   dest_jurisdiction: US
