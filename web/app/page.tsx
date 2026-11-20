@@ -1,9 +1,11 @@
+import { Suspense } from "react";
 import Link from "next/link";
 import { ArrowRight, Boxes, ShieldCheck, Repeat, Activity, Info, Link2 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { CorridorCard } from "@/components/CorridorCard";
 import { LivenessLegend } from "@/components/LivenessLegend";
 import { AnchorCard } from "@/components/AnchorCard";
+import { AttestedAnchorsSection } from "@/components/AttestedAnchorsSection";
 import { RegistryFreshness } from "@/components/RegistryFreshness";
 import { corridors, liveness } from "@/lib/corridors";
 import { fetchAttestations, REGISTRY_ID, REGISTRY_NETWORK } from "@/lib/registry";
@@ -122,11 +124,17 @@ export default async function Home() {
             No anchors have been attested yet.
           </div>
         ) : (
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {attestations.anchors.map((a) => (
-              <AnchorCard key={a.domain} anchor={a} />
-            ))}
-          </div>
+          <Suspense
+            fallback={
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {attestations.anchors.map((a) => (
+                  <AnchorCard key={a.domain} anchor={a} />
+                ))}
+              </div>
+            }
+          >
+            <AttestedAnchorsSection anchors={attestations.anchors} />
+          </Suspense>
         )}
       </section>
 

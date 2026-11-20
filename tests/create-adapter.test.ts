@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { runConformance } from "@corridor/adapter-kit";
 import { ADAPTER_ID_PATTERN, createAdapter, parseArgs } from "../scripts/create-adapter";
 
@@ -101,8 +101,8 @@ describe("create:adapter", () => {
     const dir = join(root, "runs");
     createAdapter({ id: "demo-bank", dir });
     // The fixture throws if its corridor does not parse, which a type-check cannot see.
-    const { corridor, intent } = await import(join(dir, "src/fixture.ts"));
-    const { DemoBankAdapter } = await import(join(dir, "src/index.ts"));
+    const { corridor, intent } = await import(pathToFileURL(join(dir, "src/fixture.ts")).href);
+    const { DemoBankAdapter } = await import(pathToFileURL(join(dir, "src/index.ts")).href);
     const report = await runConformance(new DemoBankAdapter(), { intent, corridor });
     const caps = report.results.find((r) => r.name === "capabilities well-formed");
     expect(caps?.passed, caps?.detail).toBe(true);
@@ -144,7 +144,12 @@ describe("create:adapter", () => {
         ],
       }),
     );
-    const tsc = join(nodeModules, ".bin", "tsc");
-    expect(() => execFileSync(tsc, ["-p", tsconfig], { stdio: "pipe" })).not.toThrow();
+    const tsc = join(nodeModules, ".bin", process.platform === "win32" ? "tsc.cmd" : "tsc");
+    expect(() =>
+      execFileSync(tsc, ["-p", tsconfig], {
+        stdio: "pipe",
+        shell: process.platform === "win32",
+      }),
+    ).not.toThrow();
   }, 120_000);
 });

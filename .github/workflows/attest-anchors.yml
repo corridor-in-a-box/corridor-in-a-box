@@ -90,6 +90,10 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
+      - name: Preflight registry contract
+        if: ${{ env.ATTESTER_SECRET != '' }}
+        run: pnpm preflight:registry
+
       - name: Submit attestations
         if: ${{ env.ATTESTER_SECRET != '' }}
         run: pnpm attest --from sweep/sweep.json

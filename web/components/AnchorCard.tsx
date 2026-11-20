@@ -48,6 +48,23 @@ export function AnchorCard({ anchor }: { anchor: AnchorAttestation }) {
         )}
       </div>
 
+      {(anchor.countries?.length || anchor.receiveAssets?.length) ? (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-secondary-text">
+          {anchor.countries && anchor.countries.length > 0 && (
+            <div className="flex items-center gap-1">
+              <span className="font-medium text-primary-text">Country:</span>
+              <span className="font-mono">{anchor.countries.join(", ")}</span>
+            </div>
+          )}
+          {anchor.receiveAssets && anchor.receiveAssets.length > 0 && (
+            <div className="flex items-center gap-1">
+              <span className="font-medium text-primary-text">Assets:</span>
+              <span className="font-mono">{anchor.receiveAssets.join(", ")}</span>
+            </div>
+          )}
+        </div>
+      ) : null}
+
       {/* Per-probe results. A probe that was never run is rendered differently
           from one that ran and failed — "we didn't check" and "it doesn't work"
           are different claims and the page should not blur them. */}

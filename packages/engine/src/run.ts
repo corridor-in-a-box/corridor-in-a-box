@@ -23,6 +23,7 @@ import {
   toLegacy,
   type ExternalQuoteFn,
   type OpenTransaction,
+  type Quote,
   type QuoteProvider,
 } from "@corridor/adapter-kit";
 import { canTransition, isTerminal, type CorridorState } from "./state";
@@ -188,6 +189,12 @@ export interface ExecuteOptions {
    * on-chain attestation.
    */
   trustManifestWithoutAttestation?: boolean;
+  /**
+   * Pre-fetched quote to honour at that exact price, skipping quote request.
+   * When supplied, execute() uses this quote as-is and records in the audit
+   * trail that the quote was supplied.
+   */
+  quote?: Quote;
   /**
    * Run quote → comply → open → pre-settle gate against the real anchor, then
    * stop before `settling`: `SettlementSubmitter.submit()` (and `findExisting`)
@@ -562,14 +569,25 @@ export async function execute(
   }
 
   // --- 1. quote ---------------------------------------------------------
-  const q = await timed("quote", () => quote(adapter, intent, corridor, now(), provider));
+  let q: Outcome<Quote>;
+  const quoteSupplied = opts.quote !== undefined;
+  if (opts.quote) {
+    q = ok(opts.quote);
+    (deps.logger ?? silentLogger).log("info", "corridor.quote.supplied", {
+      idempotencyKey: run.idempotencyKey,
+      corridorId: corridor.id,
+      quoteId: opts.quote.id,
+    });
+  } else {
+    q = await timed("quote", () => quote(adapter, intent, corridor, now(), provider));
+  }
   if (!q.ok) return die(q.error);
   run.quoteId = q.value.id;
   run.quoteExpiresAt = q.value.expiresAt;
   run.quoteFirm = q.value.firm;
   run.settlementAmount = q.value.sourceAmount.amount;
   {
-    const t = await advance("quoted");
+    const t = await advance("quoted", quoteSupplied ? { quoteSupplied: true } : undefined);
     if (!t.ok) return die(t.error);
   }
 
@@ -952,6 +970,7 @@ interface AdvanceMeta {
   amountRefunded?: string;
   amountFee?: string;
   checks?: readonly CheckResult[];
+  quoteSupplied?: boolean;
 }
 
 interface RunContext {
@@ -1270,6 +1289,7 @@ async function emitTransition(
     amountRefunded?: string;
     amountFee?: string;
     checks?: readonly CheckResult[];
+    quoteSupplied?: boolean;
   },
 ): Promise<void> {
   const entry: AuditEntry = {
@@ -1285,6 +1305,7 @@ async function emitTransition(
     ...(meta?.networkFee && { networkFee: meta.networkFee }),
     ...(meta?.amountRefunded !== undefined && { amountRefunded: meta.amountRefunded }),
     ...(meta?.amountFee !== undefined && { amountFee: meta.amountFee }),
+    ...(meta?.quoteSupplied !== undefined && { quoteSupplied: meta.quoteSupplied }),
     // A copy, so a caller mutating its array afterwards cannot change what was recorded.
     ...(meta?.checks && meta.checks.length > 0 && { checks: [...meta.checks] }),
   };

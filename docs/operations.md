@@ -871,3 +871,52 @@ Reopen only after confirming the anchor is healthy (a testnet payment through,
 the anchor's own status page). Clearing a halt on an unfixed anchor just
 re-spends the fee that proved the lane was down. The reset is recorded, so a
 later `tripped` right after a `reset` is a fast signal that the reopen was wrong.
+
+## 8. Registry & attester contract upgrades
+
+The on-chain anchor conformance registry (`contracts/registry`) stores observed facts about anchor capabilities. As new protocols and conformance probes are added (e.g. `sep6_info`, `sep6_auth`), `PROBE_NAMES` grows. Because probe bits are strictly appended, new bits expand the allowed `PROBE_MASK`.
+
+If an attestation job submits probe results with newer bits to an older deployed registry, the contract rejects the write with `Error::UnknownBit` (contract error `#4`, surfaced via the attester as `invalid domain (contract error #4)`).
+
+### Preflight check
+
+The nightly attestation workflow runs a preflight check before submitting per-anchor attestations:
+
+```bash
+pnpm preflight:registry
+# or for custom network:
+STELLAR_NETWORK=testnet pnpm preflight:registry
+```
+
+The preflight verifies that the deployed contract supports all current `PROBE_NAMES` and query methods (`serves_sep6`, `get_meta`, `receives_asset`). If the contract is behind, it fails with an actionable message:
+
+```
+✗ deployed registry contract on testnet is behind main: upgrade() the registry to current PROBE_NAMES before running attestation (run pnpm upgrade:registry)
+```
+
+### Upgrading the registry contract
+
+The registry contract provides an admin-only `upgrade(new_wasm_hash)` entrypoint that updates the contract executable in place while preserving all existing anchor records and metadata in storage.
+
+1. **Simulate the upgrade (default):**
+
+   ```bash
+   pnpm upgrade:registry
+   ```
+
+   This builds the `corridor-registry` wasm, computes its SHA-256 hash, and simulates both bytecode upload and `registry.upgrade()`. No transaction is broadcast.
+
+2. **Submit the upgrade:**
+   An authorized maintainer with `REGISTRY_ADMIN_SECRET` runs:
+
+   ```bash
+   REGISTRY_ADMIN_SECRET=S... pnpm upgrade:registry --submit
+   ```
+
+   This broadcasts the wasm upload, waits for ledger confirmation, and calls `upgrade(new_wasm_hash)`.
+
+3. **Mainnet safeguards:**
+   The upgrade script refuses to touch `public`/`mainnet` without the explicit `--allow-mainnet` flag:
+   ```bash
+   pnpm upgrade:registry --network public --allow-mainnet --submit
+   ```

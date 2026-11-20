@@ -630,3 +630,11 @@ export function findStale(
 function nativeToScValString(s: string): xdr.ScVal {
   return nativeToScVal(s, { type: "string" });
 }
+
+export {
+  preflightRegistry,
+  loadDeployments,
+  type PreflightOptions,
+  type PreflightResult,
+  type DeploymentsConfig,
+} from "./preflight";

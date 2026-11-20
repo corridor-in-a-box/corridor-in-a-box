@@ -46,6 +46,40 @@ export {
   BREAKERS_MIGRATION_SQL,
 } from "./breaker-pg";
 export {
+  CREATE_RATE_SAMPLES_TABLE_SQL,
+  RATE_SAMPLES_INDEX_SQL,
+  PostgresRateHistoryStore,
+  type RateSampleRecord,
+  type RateSampleSource,
+  type ListRateSamplesFilter,
+} from "./rate-samples-pg";
+export {
+  percentile,
+  computeP25,
+  computeMedian,
+  windowed,
+  estimateRate,
+  type EstimateRateOptions,
+} from "./rate-percentile";
+export {
+  DEX_TRADE_RESOLUTION_15M,
+  formatDexAsset,
+  resolveAssetQueryParams,
+  defaultHorizonUrl,
+  buildTradeAggregationsUrl,
+  transformTradeAggregations,
+  fetchTradeAggregations,
+  collectDexTradesForPair,
+  collectDexTrades,
+  loadDexPairsConfig,
+  type DexAssetConfig,
+  type DexPairConfig,
+  type HorizonTradeAggregationRecord,
+  type HorizonTradeAggregationsResponse,
+  type CollectDexTradesOptions,
+  type RateSampleSink,
+} from "./rate-collector-dex";
+export {
   UnimplementedSubmitter,
   createMockSubmitter,
   StellarPaymentStrategy,

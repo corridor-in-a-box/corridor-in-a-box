@@ -97,6 +97,25 @@
     "returns HTTP 404 (https://bitso.com/.well-known/stellar.toml), so no SEP-31",
     "receive capability was verified and no corridor manifest was written.",
     "",
+    "ntokens.com is nTokens (Brazil; Pix / BRL on Stellar, listed in Stellar Anchor",
+    "Directory). Probed 2026-11-19: toml_fetch, sep10_auth, sep31_info (receives BRL),",
+    "sep6_info and sep6_auth all pass.",
+    "",
+    "pubnet-sep.latamex.com is Latamex / Settle Network (Argentina, Brazil; ARST, BRLT,",
+    "USDC on Stellar, listed in Stellar ecosystem directory). Probed 2026-11-19: toml_fetch,",
+    "sep10_auth, sep6_info, sep6_auth pass.",
+    "",
+    "etherfuse.com is Etherfuse (Mexico; tokenized Mexican bonds CETES and USDC on",
+    "Stellar, listed in Stellar Anchor Directory). Probed 2026-11-19: toml_fetch and",
+    "sep10_auth pass.",
+    "",
+    "amero.exchange is Amero Exchange (Mexico / Latin America, listed in Stellar",
+    "Anchor Directory). Probed 2026-11-19: toml_fetch passes.",
+    "",
+    "ripio.com is Ripio (Argentina, Brazil, Colombia, Mexico; major Latin American exchange",
+    "listed in Stellar Anchor Directory). Probed 2026-11-19: toml_fetch returned HTTP 403,",
+    "recording an inconclusive probe like blindpay.com.",
+    "",
     "Each entry in `anchors` records curator-declared context (name, ISO 3166-1",
     "alpha-2 countries, kind, directory/manifest source, and date added). Countries",
     "and `kind` are curator-declared metadata, NOT attested facts; `domains` mirrors",
@@ -121,7 +140,12 @@
     "arf.one",
     "stellar-sep-24.banxa.com",
     "flutterwave.com",
-    "bitso.com"
+    "bitso.com",
+    "ntokens.com",
+    "pubnet-sep.latamex.com",
+    "etherfuse.com",
+    "amero.exchange",
+    "ripio.com"
   ],
   "anchors": [
     {
@@ -275,6 +299,46 @@
       "kind": "other",
       "source": "https://anchors.stellar.org/?search=Bitso",
       "added": "2026-10-22"
+    },
+    {
+      "domain": "ntokens.com",
+      "name": "nTokens",
+      "countries": ["BR"],
+      "kind": "offramp",
+      "source": "https://anchors.stellar.org/?search=nTokens",
+      "added": "2026-11-19"
+    },
+    {
+      "domain": "pubnet-sep.latamex.com",
+      "name": "Latamex",
+      "countries": ["AR", "BR"],
+      "kind": "offramp",
+      "source": "https://pubnet-sep.latamex.com/.well-known/stellar.toml",
+      "added": "2026-11-19"
+    },
+    {
+      "domain": "etherfuse.com",
+      "name": "Etherfuse",
+      "countries": ["MX"],
+      "kind": "other",
+      "source": "https://anchors.stellar.org/?search=Etherfuse",
+      "added": "2026-11-19"
+    },
+    {
+      "domain": "amero.exchange",
+      "name": "Amero Exchange",
+      "countries": ["AR", "BR", "CL", "CO", "CR", "DO", "EC", "GT", "MX", "PA", "PE", "SV"],
+      "kind": "other",
+      "source": "https://anchors.stellar.org/?search=Amero",
+      "added": "2026-11-19"
+    },
+    {
+      "domain": "ripio.com",
+      "name": "Ripio",
+      "countries": ["AR", "BR", "CO", "MX"],
+      "kind": "other",
+      "source": "https://anchors.stellar.org/?search=Ripio",
+      "added": "2026-11-19"
     }
   ]
 }
