@@ -7,6 +7,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
+### Added — SEP-10 lane check with the business's own key ([#631](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/631))
+
+- `checkLane(corridor, { signer, fetchImpl?, timeoutMs? })` in `@corridor/router` runs
+  a real SEP-10 challenge/response against the corridor's receiving anchor with the
+  business's own signer and reports `open` (a JWT was issued), `closed` (the anchor
+  answered 401 or 403) or `unknown` (no `web_auth` endpoint, timeout, 5xx, malformed
+  response). A 400 stays `unknown`: it can mean our own malformed challenge, not an
+  onboarding refusal. The check moves no money and returns no JWT — the credential is
+  discarded, never logged or reported.
+- `tests/lane-check.test.ts` drives stub anchors that accept and refuse the signed
+  challenge, plus server-error, unreachable and no-endpoint cases; it also asserts the
+  JWT never reaches the result. Design context in `docs/rfcs/0004-smart-router.md`.
+
 ### Fixed — stale documentation and comments
 
 - Docs said no transition enters `refund_pending` and that `refunded` is reachable only when
