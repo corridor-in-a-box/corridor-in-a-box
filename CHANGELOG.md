@@ -57,6 +57,25 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   for `engine/src/{run,verbs,state,idempotency}.ts` and `types/src/money.ts`; CI's `build`
   job runs it and uploads `coverage/lcov.info`. The numbers are in `CONTRIBUTING.md`.
 
+### Added — a testnet / mainnet switch on the dashboard ([#700](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/700))
+
+- The dashboard's attested anchors sit behind a Testnet / Mainnet switch. Each network is
+  read from its own registry over its own RPC (`fetchAttestations(network)`), and
+  `?network=public` links straight to the mainnet view. `STELLAR_NETWORK` chooses which
+  network opens first; `mainnet` is accepted for `public`, and a value that names neither
+  network now means testnet instead of an error.
+- Every `AnchorCard` and `CorridorCard` carries a badge naming its network, and an anchor
+  card's ledger and attester links go to that network's explorer. The corridor page still
+  reads the `STELLAR_NETWORK` registry only, and now says which one that is.
+- A network with no registry in `contracts/deployments.json`, which is mainnet today, shows
+  "No registry on Mainnet yet" and makes no RPC call. That is kept apart from a registry that
+  could not be read and from one that is empty. Once `public.registry` is set the mainnet
+  view fills in with no code change.
+- `tests/web-network.test.ts` covers the parsing, the URL and the empty state;
+  `tests/web-registry-source.test.ts` gives both networks a fake registry and checks that
+  each read goes to its own RPC and contract, and that one network being down does not blank
+  the other.
+
 ### Added — attester, full hash and explorer links on `AnchorCard` ([#290](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/290))
 
 - The web card links the attested ledger and the attester to stellar.expert for the

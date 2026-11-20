@@ -2,14 +2,11 @@ import { CircleCheck, CircleSlash, CircleHelp, Clock, ExternalLink } from "lucid
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { CopyButton } from "@/components/CopyButton";
-import {
-  PROBE_NAMES,
-  REGISTRY_NETWORK,
-  STALE_AFTER_LEDGERS,
-  type AnchorAttestation,
-} from "@/lib/registry";
+import { NetworkBadge } from "@/components/NetworkBadge";
+import { PROBE_NAMES, STALE_AFTER_LEDGERS, type AnchorAttestation } from "@/lib/registry";
 import { approxLedgerDuration } from "@/lib/freshness";
 import { addressUrl, ledgerUrl, shortAddress } from "@/lib/explorer";
+import type { NetworkId } from "@/lib/network";
 
 /**
  * One attested anchor.
@@ -18,8 +15,18 @@ import { addressUrl, ledgerUrl, shortAddress } from "@/lib/explorer";
  * merge: what the anchor's stellar.toml ADVERTISES, and what actually WORKED
  * when someone called it. Showing only the first is what made a corridor
  * pointing at a non-existent domain look healthy.
+ *
+ * `network` is the registry the attestation was read from. The card says so, and
+ * its ledger and attester links go to that network's explorer: the same domain can
+ * be attested on testnet and on mainnet, and those are different facts.
  */
-export function AnchorCard({ anchor }: { anchor: AnchorAttestation }) {
+export function AnchorCard({
+  anchor,
+  network,
+}: {
+  anchor: AnchorAttestation;
+  network: NetworkId;
+}) {
   const stale = anchor.staleness > STALE_AFTER_LEDGERS;
   // Green requires the capability to be advertised AND probed green AND fresh.
   const usable = anchor.servesSep31 && !stale;
@@ -33,19 +40,22 @@ export function AnchorCard({ anchor }: { anchor: AnchorAttestation }) {
             {anchor.seps.length ? anchor.seps.map((n) => `SEP-${n}`).join(" · ") : "no SEP endpoints"}
           </div>
         </div>
-        {usable ? (
-          <Badge variant="success">
-            <CircleCheck size={12} /> serves SEP-31
-          </Badge>
-        ) : anchor.servesSep31 ? (
-          <Badge variant="warning">
-            <Clock size={12} /> stale
-          </Badge>
-        ) : (
-          <Badge variant="default">
-            <CircleSlash size={12} /> no SEP-31
-          </Badge>
-        )}
+        <div className="flex shrink-0 flex-col items-end gap-1.5">
+          {usable ? (
+            <Badge variant="success">
+              <CircleCheck size={12} /> serves SEP-31
+            </Badge>
+          ) : anchor.servesSep31 ? (
+            <Badge variant="warning">
+              <Clock size={12} /> stale
+            </Badge>
+          ) : (
+            <Badge variant="default">
+              <CircleSlash size={12} /> no SEP-31
+            </Badge>
+          )}
+          <NetworkBadge network={network} />
+        </div>
       </div>
 
       {/* Per-probe results. A probe that was never run is rendered differently
@@ -81,7 +91,7 @@ export function AnchorCard({ anchor }: { anchor: AnchorAttestation }) {
         <div>
           attested at ledger{" "}
           <a
-            href={ledgerUrl(REGISTRY_NETWORK, anchor.attestedLedger)}
+            href={ledgerUrl(network, anchor.attestedLedger)}
             target="_blank"
             rel="noreferrer"
             aria-label={`Ledger ${anchor.attestedLedger} on stellar.expert (opens in a new tab)`}
@@ -97,7 +107,7 @@ export function AnchorCard({ anchor }: { anchor: AnchorAttestation }) {
         <div className="flex items-center gap-1">
           attested by{" "}
           <a
-            href={addressUrl(REGISTRY_NETWORK, anchor.attester)}
+            href={addressUrl(network, anchor.attester)}
             target="_blank"
             rel="noreferrer"
             title={anchor.attester}

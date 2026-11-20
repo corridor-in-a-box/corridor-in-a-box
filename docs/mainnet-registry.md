@@ -128,6 +128,7 @@ Update `contracts/deployments.json`:
 
 - `examples/read-registry.ts`: Reads `deployments.json` for `STELLAR_NETWORK=public`.
 - `RegistryRouteResolver` (`@corridor/router`): Connects to `deployments.json["public"].registry` for mainnet settlement validation.
+- Dashboard (`web/`): Reads both networks from `deployments.json`. Its Mainnet view shows "No registry on Mainnet yet" while `public.registry` is `null` and the mainnet attestations once it is set, with no code change.
 - Workflow execution: Mainnet scheduled attestation runs under a dedicated, permissions-restricted workflow dispatch or separate cron.
 
 ---
