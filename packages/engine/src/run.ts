@@ -498,6 +498,11 @@ export async function execute(
   });
   const { advance, die, finishFailure } = context;
 
+  // Pin the resolved anchor domain and protocol on the run record (#624) so
+  // restarts and readers agree on which route was chosen.
+  run.receivingDomain = corridor.dest.endpoints.home_domain;
+  run.routeProtocol = corridor.dest.protocol;
+
   const strategies = deps.strategies ?? defaultStrategies(deps.submitter, adapter);
   const caps = adapter.capabilities();
   const compat = checkCompatibility(corridor, caps, strategies);
@@ -567,6 +572,7 @@ export async function execute(
   run.quoteId = q.value.id;
   run.quoteExpiresAt = q.value.expiresAt;
   run.quoteFirm = q.value.firm;
+  run.priceLabel = q.value.firm ? "locked" : "indicative";
   run.settlementAmount = q.value.sourceAmount.amount;
   {
     const t = await advance("quoted");
