@@ -258,6 +258,39 @@ Exit codes are distinct so CI can tell the cases apart: `2` missing
 anchor does not quote), `4` the stack is not fit (`doctor` failed), `5` the
 corridor ran and did not complete.
 
+#### The published run history
+
+The nightly `reference-corridor` workflow appends one machine-readable record
+per run to `web/lib/generated/reference-runs.json` and commits it:
+
+```json
+{
+  "runs": [
+    {
+      "runId": 43969161708,
+      "date": "2026-11-17T05:43:00.000Z",
+      "outcome": "success",
+      "durationSeconds": 631,
+      "trail": ["created", "quoted", "completed"],
+      "txHashes": ["81c46422…"],
+      "runUrl": "https://github.com/corridor-in-a-box/corridor-in-a-box/actions/runs/43969161708"
+    }
+  ]
+}
+```
+
+Newest first, capped at 180 runs. Failed and cancelled runs are recorded too — a
+success rate needs denominators — and a re-run of the same workflow run id
+replaces its record. `pnpm record:reference-run` writes it (`GITHUB_RUN_ID`,
+`RUN_STARTED_AT`, `CORRIDOR_EXIT` and `RUN_LOG` are its inputs), and
+`web/lib/reference-runs.ts` reads it, including the latest entry the dashboard's
+`#586` panel shows, so both views come from one source.
+
+The commit needs the workflow token to be allowed to push to the branch it runs
+on (`permissions: contents: write` is set in the workflow). If branch protection
+on `main` blocks that, allow `github-actions[bot]` or move the record to an
+unprotected data branch and read it from there.
+
 **The signer** must be a testnet account holding the corridor's bridge asset with
 a trustline for it — `op_src_no_trust` above is exactly what a missing trustline
 looks like. `pnpm verify:settle` needs no such setup because it settles in native

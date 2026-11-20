@@ -20,6 +20,11 @@ jobs:
     # The stack is minutes to boot and the corridor waits on the observer's own
     # cadence, but a hung container must not burn an hour of runner time.
     timeout-minutes: 30
+    # The last step commits this run's record to web/lib/generated/reference-runs.json
+    # (issue #680), so the workflow's token needs to be able to push to the branch
+    # it runs on. Scheduled runs refresh the site's history without a deploy step.
+    permissions:
+      contents: write
     # Job-level, deliberately. The `secrets` context is NOT available in a
     # step-level `if:` — using it there is not a no-op, it makes the whole
     # workflow file invalid, and GitHub then fails every run at 0s without ever
@@ -47,6 +52,11 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+
+      # The recorded duration is wall-clock from here, so it includes the stack
+      # booting — the cost a trend should show, not just the payment itself.
+      - name: Note when the run started
+        run: echo "RUN_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
 
       # --- guards, before anything is stood up or signed -------------------
 
@@ -130,7 +140,52 @@ jobs:
           scripts/reference-anchor.sh payout-watch > anchor-logs/payout-watch.log 2>&1 &
           watcher=$!
           trap 'kill "$watcher" 2>/dev/null || true' EXIT
-          pnpm verify:corridor
+          # Keep the output for the history record below, and keep the runner's
+          # own exit status: a pipe into tee must not turn a failure into a pass.
+          set +e
+          pnpm verify:corridor 2>&1 | tee corridor-run.log
+          status=${PIPESTATUS[0]}
+          set -e
+          echo "CORRIDOR_EXIT=$status" >> "$GITHUB_ENV"
+          exit "$status"
+
+      # --- the published history (issue #680) ------------------------------
+
+      # Appends date, outcome, duration, trail and settle tx hashes to the file
+      # the web app reads. It runs even when the corridor failed: a history of
+      # green runs only cannot show a success rate. A re-run of this workflow
+      # run replaces its record rather than adding a second one.
+      - name: Record the run in the published history
+        if: ${{ always() }}
+        run: pnpm record:reference-run
+        env:
+          RUN_LOG: corridor-run.log
+          RUN_CANCELLED: ${{ cancelled() }}
+
+      - name: Publish the history
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add web/lib/generated/reference-runs.json
+          if git diff --cached --quiet; then
+            echo "history already records run $GITHUB_RUN_ID"
+            exit 0
+          fi
+          git commit -m "chore(reference-runs): record nightly run $GITHUB_RUN_ID"
+          # A pull request can land while the corridor settles, so rebase onto the
+          # new tip instead of failing the whole run on a non-fast-forward.
+          for attempt in 1 2 3; do
+            if git fetch origin "$GITHUB_REF_NAME" \
+              && git rebase FETCH_HEAD \
+              && git push origin "HEAD:$GITHUB_REF_NAME"; then
+              exit 0
+            fi
+            sleep $((attempt * 5))
+          done
+          echo "::error::could not publish web/lib/generated/reference-runs.json"
+          exit 1
         env:
           CORRIDOR_SIGNER_SECRET: ${{ env.SIGNER_SECRET }}
 
