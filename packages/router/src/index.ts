@@ -98,3 +98,6 @@ export {
 
 export { createAdapterRegistry } from "./adapters";
 export type { AdapterFactory, AdapterRegistry } from "./adapters";
+
+export { rank } from "./rank";
+export type { RankableOption } from "./rank";
