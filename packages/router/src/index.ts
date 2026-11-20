@@ -98,3 +98,14 @@ export {
 
 export { createAdapterRegistry } from "./adapters";
 export type { AdapterFactory, AdapterRegistry } from "./adapters";
+
+export type {
+  PriceLabel,
+  PlannerPolicy,
+  RouteRequest,
+  RoutePrice,
+  RouteOption,
+  DroppedRouteOption,
+  RoutePlan,
+  RoutePlanner,
+} from "./planner";
