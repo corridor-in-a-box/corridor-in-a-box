@@ -180,6 +180,22 @@ export interface PaymentIntent {
    * goes to the anchor through SEP-12, never through here.
    */
   readonly destinationFields?: Readonly<Record<string, string>>;
+  /**
+   * Recipient Stellar wallet instructions when routing directly to a wallet
+   * (`dest.protocol === "wallet"`): the destination `G...` account and optional
+   * transaction memo supplied by the caller at payment time.
+   */
+  readonly wallet?: WalletDestination;
+}
+
+/** Per-payment Stellar wallet destination supplied on a `protocol: wallet` intent. */
+export interface WalletDestination {
+  /** Recipient Stellar public key (`G...`). */
+  readonly account: string;
+  /** Optional transaction memo attached to the on-chain payment. */
+  readonly memo?: string;
+  /** Stellar memo encoding when `memo` is present. Defaults to `"text"` when omitted. */
+  readonly memoType?: "text" | "hash" | "id";
 }
 
 // --- Settlement references ----------------------------------------------
