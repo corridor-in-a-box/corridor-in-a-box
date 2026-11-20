@@ -7,6 +7,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
+### Added — routing choice in the audit trail (#628)
+
+- `RouteDecision` takes an optional `ranking` (`RouteOption` / `RouteRanking` in `@corridor/router`).
+  The engine records the chosen option, its label and rank, and the reasons of the top three
+  options as `route` on the run's first audit entry out of `created`; `PostgresAuditSink`
+  keeps it in `detail`. Without a ranking the receiving adapter is recorded as the only option.
+  See `docs/route-resolver.md#recording-the-choice`.
+
 ### Fixed — stale documentation and comments
 
 - Docs said no transition enters `refund_pending` and that `refunded` is reachable only when

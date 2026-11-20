@@ -10,6 +10,30 @@ import type { Corridor } from "@corridor/manifest";
 import type { AnchorAdapter, SourceAnchorAdapter } from "@corridor/adapter-kit";
 import type { PaymentIntent } from "@corridor/types";
 
+/**
+ * One option a resolver considered for a payment, with why it ranked where it
+ * did. Reasons are short, PII-free strings (e.g. "attested 2h ago",
+ * "p95 settle 41s"): they are written to the append-only audit trail.
+ */
+export interface RouteOption {
+  /** Stable id for the option, e.g. the receiving anchor's adapter name or domain. */
+  readonly id: string;
+  /** Human-readable label for operators, e.g. "Anchor X (MXN, SPEI)". */
+  readonly label: string;
+  /** 1-based rank; 1 is the best option. */
+  readonly rank: number;
+  /** Why the option ranked where it did, most important first. */
+  readonly reasons: readonly string[];
+}
+
+/** How a resolver ranked its options, so the choice can be explained later. */
+export interface RouteRanking {
+  /** `id` of the option the resolver chose; it should match `receiving`. */
+  readonly chosen: string;
+  /** Every option considered, in any order; the engine audits the top three by rank. */
+  readonly options: readonly RouteOption[];
+}
+
 export interface RouteDecision {
   /** The receiving anchor chosen for this payment. */
   readonly receiving: AnchorAdapter;
@@ -23,6 +47,13 @@ export interface RouteDecision {
   readonly split?: ReadonlyArray<{ adapter: AnchorAdapter; weight: number }>;
   /** How the route decision was reached: verified against on-chain evidence or assumed from manifest. */
   readonly trust: "attested" | "manifest";
+  /**
+   * Optional ranking behind the choice. When present the engine records the
+   * chosen option and the top three options with their reasons in the audit
+   * trail; when absent it records the receiving adapter as the only option.
+   * See docs/route-resolver.md#recording-the-choice.
+   */
+  readonly ranking?: RouteRanking;
 }
 
 /**
