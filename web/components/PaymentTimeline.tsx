@@ -36,28 +36,38 @@ const DOT: Record<TimelineStepStatus, string> = {
 };
 
 /**
- * Polls GET /api/payments/:key until the payment reaches a terminal state and
- * draws it as five steps. `trail` seeds the progress with states already seen
- * (such as the POST response's), since a failed run's status alone does not say
- * how far it got. Remount it (change its `key`) to watch another run.
+ * Polls GET /api/payments/:key and draws the payment as five steps, from the
+ * moment it is submitted until it reaches a terminal state. While `submitting`,
+ * a 404 means the run is not stored yet and is retried. `trail` and `result`
+ * come from the POST response once it lands: the trail says how far a failed run
+ * got, which its status alone does not, and the result is the outcome to show
+ * if the status endpoint cannot see the run (another server instance's memory).
+ * Remount it (change its `key`) to watch another run.
  */
 export function PaymentTimeline({
   idempotencyKey,
+  submitting = false,
   trail = [],
+  result,
   network = "testnet",
 }: {
   idempotencyKey: string;
+  submitting?: boolean;
   trail?: readonly string[];
+  result?: PaymentStatusLike;
   network?: string;
 }) {
-  const [status, setStatus] = useState<PaymentStatusLike | null>(null);
-  const [progress, setProgress] = useState(() =>
-    trail.reduce((reached, state) => advance(reached, { state }), 0),
-  );
+  const [polled, setPolled] = useState<PaymentStatusLike | null>(null);
+  const [polledProgress, setPolledProgress] = useState(0);
   const [pollError, setPollError] = useState<string | null>(null);
   const headingId = useId();
 
+  const polledFinal = polled !== null && isFinalState(polled.state);
+  const resultFinal = result !== undefined && isFinalState(result.state);
+  const finished = polledFinal || resultFinal;
+
   useEffect(() => {
+    if (finished) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -71,7 +81,7 @@ export function PaymentTimeline({
         const body = (await res.json()) as PaymentStatusLike & { error?: string };
         if (res.ok && typeof body.state === "string") {
           next = body;
-        } else {
+        } else if (!(submitting && res.status === 404)) {
           retry = res.status >= 500;
           if (!cancelled) setPollError(body.error ?? `status request failed (HTTP ${res.status})`);
         }
@@ -80,11 +90,11 @@ export function PaymentTimeline({
       }
       if (cancelled) return;
       if (next) {
-        const polled = next;
+        const seen = next;
         setPollError(null);
-        setStatus(polled);
-        setProgress((prev) => advance(prev, polled));
-        retry = !isFinalState(polled.state);
+        setPolled(seen);
+        setPolledProgress((prev) => advance(prev, seen));
+        retry = !isFinalState(seen.state);
       }
       if (retry) timer = setTimeout(poll, POLL_MS);
     }
@@ -94,8 +104,14 @@ export function PaymentTimeline({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [idempotencyKey]);
+  }, [idempotencyKey, submitting, finished]);
 
+  const status = polledFinal ? polled : resultFinal ? result : (polled ?? result ?? null);
+  const progress = Math.max(
+    polledProgress,
+    trail.reduce((reached, state) => advance(reached, { state }), 0),
+    status ? advance(0, status) : 0,
+  );
   const state = status?.state ?? "created";
   const outcome = outcomeOf(state);
   const steps = timelineSteps(progress, state);
