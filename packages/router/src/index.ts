@@ -98,3 +98,5 @@ export {
 
 export { createAdapterRegistry } from "./adapters";
 export type { AdapterFactory, AdapterRegistry } from "./adapters";
+export { appendOptionReason, formatOptionReason, summarizeOptionReasons } from "./reasons";
+export type { OptionReasonStep, ReasonedOption, SummarizedOptionReason } from "./reasons";
