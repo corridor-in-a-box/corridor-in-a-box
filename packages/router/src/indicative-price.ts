@@ -70,6 +70,17 @@ export function applyEstimateMargin(
   return applyPrice(amount, multiplier, scale);
 }
 
+function trimTrailingSlashes(value: string | undefined): string {
+  if (!value) {
+    return "";
+  }
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) {
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
 /**
  * Fetch an indicative price via SEP-38 `GET /price` and compute the discounted
  * `cautiousDestAmount` used for ranking.
@@ -77,7 +88,7 @@ export function applyEstimateMargin(
 export async function fetchIndicativePrice(
   req: IndicativePriceRequest,
 ): Promise<Outcome<IndicativeRouteOption>> {
-  const quoteServer = req.quoteServer?.replace(/\/+$/, "");
+  const quoteServer = trimTrailingSlashes(req.quoteServer);
   if (!quoteServer) {
     return fail("QUOTE_UNAVAILABLE", `${req.domain}: anchor exposes no SEP-38 quote server`);
   }
