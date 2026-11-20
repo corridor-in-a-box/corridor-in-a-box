@@ -9,6 +9,7 @@ import { corridors, getCorridor, liveness, VERBS } from "@/lib/corridors";
 import type { EngineDemoResult, PaymentScenario } from "@/lib/engine-demo";
 import generatedStates from "@/lib/generated/states.json";
 import { STEP_STATUS_TEXT, announceRun, stepStatus } from "@/lib/run-status";
+import { PaymentTimeline } from "@/components/PaymentTimeline";
 
 type CorridorState = EngineDemoResult["state"];
 
@@ -26,6 +27,9 @@ export function PaymentRunner({ initialCorridor }: { initialCorridor?: string })
   const [running, setRunning] = useState(false);
   const [reached, setReached] = useState<CorridorState[]>([]);
   const [result, setResult] = useState<EngineDemoResult | null>(null);
+  // The run the progress timeline polls, with the trail the POST returned; cleared
+  // at the start of each run, so a re-run of the same key mounts a fresh timeline.
+  const [watched, setWatched] = useState<{ key: string; trail: CorridorState[] } | null>(null);
   // The amount the last run was sent with, so the field is only marked invalid
   // while it still holds the value the engine refused.
   const [submittedAmount, setSubmittedAmount] = useState<string | null>(null);
@@ -50,6 +54,7 @@ export function PaymentRunner({ initialCorridor }: { initialCorridor?: string })
     setResult(null);
     setReached([]);
     setSubmittedAmount(amount);
+    setWatched(null);
 
     // try/finally: without it, a network error or a non-JSON response threw out
     // of this function with `running` still true — spinner stuck forever, Run
@@ -81,6 +86,7 @@ export function PaymentRunner({ initialCorridor }: { initialCorridor?: string })
           `request failed (HTTP ${res.status})`;
         throw new Error(message);
       }
+      if (outcome.trail.length) setWatched({ key: idemKey, trail: [...outcome.trail] });
 
       // Animate the trail one state at a time.
       for (const state of outcome.trail) {
@@ -107,6 +113,7 @@ export function PaymentRunner({ initialCorridor }: { initialCorridor?: string })
     setResult(null);
     setReached([]);
     setSubmittedAmount(null);
+    setWatched(null);
   }
 
   const corridor = getCorridor(corridorId)!;
@@ -237,6 +244,13 @@ export function PaymentRunner({ initialCorridor }: { initialCorridor?: string })
         </div>
       </Card>
 
+      <div className="flex flex-col gap-6">
+      {watched && (
+        <Card>
+          <PaymentTimeline idempotencyKey={watched.key} trail={watched.trail} />
+        </Card>
+      )}
+
       {/* Trail */}
       <Card className="flex flex-col gap-4">
         <div className="flex items-center justify-between">
@@ -331,6 +345,7 @@ export function PaymentRunner({ initialCorridor }: { initialCorridor?: string })
           </div>
         )}
       </Card>
+      </div>
     </div>
   );
 }
