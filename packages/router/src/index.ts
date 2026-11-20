@@ -98,3 +98,12 @@ export {
 
 export { createAdapterRegistry } from "./adapters";
 export type { AdapterFactory, AdapterRegistry } from "./adapters";
+
+export { filterByCircuitBreaker } from "./breaker-filter";
+export type {
+  BreakerDroppedCandidate,
+  BreakerFilterCandidate,
+  BreakerFilterResult,
+  BreakerStateReader,
+  BreakerStatusRecord,
+} from "./breaker-filter";
