@@ -1,0 +1,38 @@
+# Lychee configuration for corridor-in-a-box markdown link checking.
+
+# Maximum number of concurrent network requests
+max_concurrency = 8
+
+# Request timeout in seconds
+timeout = 20
+
+# Accept HTTP status codes (accept 429 to avoid CI failure on external rate limits)
+accept = [200, 204, 206, 429]
+
+# URLs and patterns to exclude from link checking
+exclude = [
+  # Localhost URLs used for development and local testing
+  '^https?://localhost(?::\d+)?',
+  '^https?://127\.0\.0\.1(?::\d+)?',
+
+  # Stellar Horizon and Soroban RPC API roots (API endpoints, not browsable web pages)
+  '^https?://horizon.*\.stellar\.org/?$',
+  '^https?://mainnet\.sorobanrpc\.com/?$',
+
+  # Stellar Friendbot API endpoint (returns 400 without account query params)
+  '^https?://friendbot.*\.stellar\.org',
+
+  # Test anchor SEP server endpoints (API endpoints that require auth or params)
+  '^https?://testanchor\.stellar\.org/.*',
+
+  # Example and placeholder URLs in documentation and tests
+  '^https?://source\.example',
+  '^https?://dest\.example',
+  '^https?://.*\.example',
+  '^https?://\.\.',
+  '^https?://<',
+
+  # External sites with aggressive anti-bot / bot-blocking protection
+  '^https?://cowrie\.exchange',
+  '^https?://anchors\.stellar\.org',
+]

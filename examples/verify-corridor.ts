@@ -29,6 +29,7 @@
 //   AMOUNT=...                    default 10.00
 //   SKIP_DOCTOR=1                 skip the preflight (stack managed elsewhere)
 
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { loadCorridor } from "@corridor/manifest";
 import { execute } from "@corridor/engine";
@@ -189,6 +190,16 @@ async function main(): Promise<void> {
     );
   }
 
+  const isCompleted = result.ok && result.value.state === "completed";
+  recordStepSummary({
+    amount: AMOUNT,
+    asset: corridor.settlement.bridge_asset,
+    state: result.ok ? result.value.state : (stored?.state ?? "failed"),
+    trail,
+    txHash: stored?.stellarTxHash,
+    ok: isCompleted,
+  });
+
   if (!result.ok) {
     console.error(`\n✗ ${result.error.code} — ${result.error.message}`);
     console.error(`  terminal state: ${stored?.state ?? "unknown"}`);
@@ -203,6 +214,40 @@ async function main(): Promise<void> {
 
   console.log(`\n✓ corridor completed end to end against the reference anchor`);
   console.log(`  ${audit.entries.length} transitions recorded`);
+}
+
+function recordStepSummary(info: {
+  amount: string;
+  asset: string;
+  state: string;
+  trail: readonly string[];
+  txHash?: string;
+  ok: boolean;
+}): void {
+  const summaryFile = process.env.GITHUB_STEP_SUMMARY;
+  if (!summaryFile) return;
+
+  try {
+    let header = "";
+    if (
+      !existsSync(summaryFile) ||
+      readFileSync(summaryFile, "utf8").trim().length === 0 ||
+      !readFileSync(summaryFile, "utf8").includes("Reference Corridor Runs")
+    ) {
+      header =
+        "### Reference Corridor Runs\n\n" +
+        "| Amount | Asset | Status | Settle Tx | Trail |\n" +
+        "| :--- | :--- | :--- | :--- | :--- |\n";
+    }
+    const status = info.ok ? "✅ completed" : `❌ ${info.state}`;
+    const tx = info.txHash
+      ? `[\`${info.txHash.slice(0, 8)}…\`](https://stellar.expert/explorer/testnet/tx/${info.txHash})`
+      : "—";
+    const row = `| ${info.amount} | ${info.asset} | ${status} | ${tx} | \`${info.trail.join(" → ")}\` |\n`;
+    appendFileSync(summaryFile, header + row, "utf8");
+  } catch (err) {
+    console.error("Warning: failed to write to GITHUB_STEP_SUMMARY:", err);
+  }
 }
 
 main().catch((e) => {

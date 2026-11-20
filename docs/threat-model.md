@@ -57,6 +57,17 @@ The system protects four primary asset classes:
   - _How will multi-attester consensus / quorum weighting replace the current single-attester model as the ecosystem decentralizes?_
   - _What challenge or slashing mechanism should penalize an enrolled attester if it attests to false capabilities before administrative revocation?_
 
+### 1.5 Public Lane Records & Partner Graph Privacy
+
+- **Description & Threat:** Public on-chain lane records ([`docs/public-lane-records.md`](public-lane-records.md)) allow receiving anchors to publicly opt in to routing partnerships. Because on-chain storage is public, publishing bilateral agreements leaks the commercial partner graph (which sending institutions route through which receiving anchors, volumes, and limits). An adversary could also attempt to register unauthorized lanes or submit unauthorized revocations.
+- **Mitigations:**
+  - **Receiver ed25519 Cryptographic Proof:** A lane registration requires an ed25519 signature from the receiving domain's attested `stellar.toml` signing key over an authoritative payload (`register_lane`), preventing unauthorized third parties from declaring bogus partnerships.
+  - **Bounded Lease TTLs & Fast Revocation:** Lane records carry explicit ledger expiration and can be immediately revoked by the receiver key (`revoke_lane`), minimizing exposure windows.
+  - **Dual-Mode Privacy Model:** Commercial operators requiring strict partner anonymity remain on private `RouteResolver` modules ([`docs/route-resolver.md`](route-resolver.md)), reserving public lane records for transparent public-benefit and remittance corridors.
+- **Known Gaps (Open Questions):**
+  - _How should zero-knowledge proof credentials (e.g. Groth16 or Bulletproofs on Soroban) allow routing verification without publishing the plaintext destination domain on-chain?_
+  - _How should dispute resolution proceed if a receiver revokes a lane while a payment transaction is in flight?_
+
 ---
 
 ## 2. Actors

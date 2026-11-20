@@ -10,9 +10,9 @@ reconcile → recover` over any standards-compliant anchor pair, and adding a ne
 corridor is a new `*.corridor.yaml` file — not a fork.
 
 **Live demo:** [corridor-in-a-box.vercel.app](https://corridor-in-a-box.vercel.app)
-— the corridor dashboard and a payment walkthrough. **The walkthrough is a
-simulation**: it drives a re-implementation of the state machine and never
-touches the Stellar network. `ng-cowrie` is the one exception **in the demo's
+— the corridor dashboard and a payment walkthrough. **The walkthrough runs the
+real `@corridor/engine`**: it uses mock anchor and settlement adapters, so no
+funds move and nothing touches the Stellar network. `ng-cowrie` is the one exception **in the demo's
 bundled lanes**: its endpoints were probed against Cowrie's production API on
 2026-08-11 — SEP-10 signed a challenge, SEP-12 answered, and SEP-31 `/info`
 returned a non-empty receive list — so it renders `VERIFIED`. That means

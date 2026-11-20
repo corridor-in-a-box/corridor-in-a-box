@@ -123,14 +123,23 @@ jobs:
       # payout-watch plays the anchor's payout operator: the reference server
       # only pays a SEP-31 transaction out when its test endpoint is called (see
       # reference-anchor.sh). Its log lands next to the platform logs.
-      - name: Run the corridor to completed
+      - name: Run the corridor at small, typical and near-maximum amounts
         run: |
           set -euo pipefail
           mkdir -p anchor-logs
           scripts/reference-anchor.sh payout-watch > anchor-logs/payout-watch.log 2>&1 &
           watcher=$!
           trap 'kill "$watcher" 2>/dev/null || true' EXIT
-          pnpm verify:corridor
+
+          # Run the corridor at small (1.00), typical (10.00), and near-maximum (25.00) amounts.
+          # All three results are recorded to the GitHub job summary table.
+          exit_code=0
+          for amt in 1.00 10.00 25.00; do
+            echo "::group::Run corridor at $amt USDC"
+            AMOUNT="$amt" pnpm verify:corridor || exit_code=$?
+            echo "::endgroup::"
+          done
+          exit $exit_code
         env:
           CORRIDOR_SIGNER_SECRET: ${{ env.SIGNER_SECRET }}
 

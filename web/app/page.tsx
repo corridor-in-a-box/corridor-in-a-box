@@ -5,8 +5,10 @@ import { CorridorCard } from "@/components/CorridorCard";
 import { LivenessLegend } from "@/components/LivenessLegend";
 import { AnchorCard } from "@/components/AnchorCard";
 import { RegistryFreshness } from "@/components/RegistryFreshness";
+import { LatestRealRun } from "@/components/LatestRealRun";
 import { corridors, liveness } from "@/lib/corridors";
 import { fetchAttestations, REGISTRY_ID, REGISTRY_NETWORK } from "@/lib/registry";
+import { fetchLatestRealRun } from "@/lib/latest-run";
 
 // Anchor facts are read from the chain at request time, not baked in at build.
 // Revalidate hourly: attestations change on the order of hours, and a page that
@@ -15,7 +17,10 @@ import { fetchAttestations, REGISTRY_ID, REGISTRY_NETWORK } from "@/lib/registry
 export const revalidate = 3600;
 
 export default async function Home() {
-  const attestations = await fetchAttestations();
+  const [attestations, latestRunData] = await Promise.all([
+    fetchAttestations(),
+    fetchLatestRealRun(),
+  ]);
   const verifiedCount = corridors.filter((c) => {
     const state = liveness(c).state;
     return state === "verified" || state === "proven";
@@ -49,6 +54,14 @@ export default async function Home() {
             </Button>
           </Link>
         </div>
+      </section>
+
+      {/* Latest Real Run on Testnet */}
+      <section aria-labelledby="latest-run-heading">
+        <h2 id="latest-run-heading" className="sr-only">
+          Latest real testnet payment
+        </h2>
+        <LatestRealRun data={latestRunData} />
       </section>
 
       {/* Features */}
