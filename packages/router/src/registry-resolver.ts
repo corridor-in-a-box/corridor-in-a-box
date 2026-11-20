@@ -143,6 +143,74 @@ function protocolLabel(protocol: string): string {
   return protocol;
 }
 
+/**
+ * Shared attestation gate used by both `RegistryRouteResolver` and
+ * `PinnedRouteResolver`: checks that `domain` serves `protocol` and that its
+ * attestation is younger than `maxStalenessLedgers`, failing closed on errors.
+ */
+export async function verifyAttestedRoute(opts: {
+  domain: string;
+  protocol: string;
+  registry: AttestationSource;
+  maxStalenessLedgers?: number;
+  allowUnattestedDomains?: readonly string[];
+}): Promise<void> {
+  const {
+    domain,
+    protocol,
+    registry,
+    maxStalenessLedgers = WEEK_OF_LEDGERS,
+    allowUnattestedDomains = [],
+  } = opts;
+
+  if (isUnattestedDomainAllowed(domain, allowUnattestedDomains)) {
+    return;
+  }
+
+  if (!isAttestedProtocol(protocol)) {
+    throw new UnattestedAnchorError(
+      domain,
+      `protocol ${protocol} has no on-chain attestation probe — the registry can only ` +
+        `attest SEP-31 and SEP-6 receive-side. Add ${domain} to allowUnattestedDomains ` +
+        `if this lane is deliberately exempt.`,
+      protocol,
+    );
+  }
+
+  let serves: boolean;
+  let staleness: number;
+  try {
+    [serves, staleness] = await Promise.all([
+      registry.serves(domain, protocol),
+      registry.staleness(domain),
+    ]);
+  } catch (cause) {
+    throw new UnattestedAnchorError(
+      domain,
+      `registry lookup failed (${cause instanceof Error ? cause.message : String(cause)})`,
+      protocol,
+    );
+  }
+
+  if (!serves) {
+    throw new UnattestedAnchorError(
+      domain,
+      `not attested as serving ${protocolLabel(protocol)} receive-side. Advertising ` +
+        `${protocolLabel(protocol)} in a stellar.toml is not sufficient — the ` +
+        `${protocolLabel(protocol)} probe must also pass.`,
+      protocol,
+    );
+  }
+  if (staleness > maxStalenessLedgers) {
+    throw new UnattestedAnchorError(
+      domain,
+      `last attested ${staleness} ledgers ago, older than the ${maxStalenessLedgers} ` +
+        `ledger limit. Re-attest before routing value through it.`,
+      protocol,
+    );
+  }
+}
+
 export class RegistryRouteResolver implements RouteResolver {
   private readonly registry: AttestationSource;
   private readonly adapterFor: (corridor: Corridor) => AnchorAdapter;
@@ -160,59 +228,13 @@ export class RegistryRouteResolver implements RouteResolver {
     const domain = corridor.dest.endpoints.home_domain;
     const protocol = protocolOf(corridor.dest);
 
-    if (isUnattestedDomainAllowed(domain, this.allowed)) {
-      return { receiving: this.adapterFor(corridor), trust: "attested" };
-    }
-
-    // A bespoke lane has no on-chain probe: the registry attests SEP-31 and
-    // SEP-6 receive-side behaviour, and there is no evidence to gather about a
-    // `custom:<id>` API. The gate refuses rather than treating the manifest's
-    // own claim as proof, and the message says which protocol is the problem so
-    // the operator knows whether to re-attest or to use the allowlist.
-    if (!isAttestedProtocol(protocol)) {
-      throw new UnattestedAnchorError(
-        domain,
-        `protocol ${protocol} has no on-chain attestation probe — the registry can only ` +
-          `attest SEP-31 and SEP-6 receive-side. Add ${domain} to allowUnattestedDomains ` +
-          `if this lane is deliberately exempt.`,
-        protocol,
-      );
-    }
-
-    let serves: boolean;
-    let staleness: number;
-    try {
-      [serves, staleness] = await Promise.all([
-        this.registry.serves(domain, protocol),
-        this.registry.staleness(domain),
-      ]);
-    } catch (cause) {
-      // Fail CLOSED. An unreachable registry means we do not know whether this
-      // anchor works, and "we do not know" must never resolve to "proceed".
-      throw new UnattestedAnchorError(
-        domain,
-        `registry lookup failed (${cause instanceof Error ? cause.message : String(cause)})`,
-        protocol,
-      );
-    }
-
-    if (!serves) {
-      throw new UnattestedAnchorError(
-        domain,
-        `not attested as serving ${protocolLabel(protocol)} receive-side. Advertising ` +
-          `${protocolLabel(protocol)} in a stellar.toml is not sufficient — the ` +
-          `${protocolLabel(protocol)} probe must also pass.`,
-        protocol,
-      );
-    }
-    if (staleness > this.maxStaleness) {
-      throw new UnattestedAnchorError(
-        domain,
-        `last attested ${staleness} ledgers ago, older than the ${this.maxStaleness} ` +
-          `ledger limit. Re-attest before routing value through it.`,
-        protocol,
-      );
-    }
+    await verifyAttestedRoute({
+      domain,
+      protocol,
+      registry: this.registry,
+      maxStalenessLedgers: this.maxStaleness,
+      allowUnattestedDomains: this.allowed,
+    });
 
     return { receiving: this.adapterFor(corridor), trust: "attested" };
   }
