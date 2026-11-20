@@ -26,6 +26,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   what the firm-quote-only adapter actually does. The `sep6` no-quote-server message changed
   accordingly.
 
+### Added — a pilot readiness checklist ([#703](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/703))
+
+- `docs/pilot-readiness.md` is the list a licensed sending partner works through before a
+  first real payment and while a pilot runs: who is responsible for what (the partner holds
+  the licence, the key and the funds), then keys, limits, safety gates, monitoring, refunds
+  and a rehearsal, each item taken from the runbook, the key-management guide or the threat
+  model, with a table mapping it back to the threat model. It records that `corridor canary`
+  signs with a raw seed and has no KMS option, and how to canary without taking the
+  distribution account's key out of the vault. Linked from the runbook.
+
 ### Added — every library package builds to `dist/` with type declarations ([#262](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/262))
 
 - Each `@corridor/*` package has a `tsup.config.ts` and a `build` script emitting ESM plus
