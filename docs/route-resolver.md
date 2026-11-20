@@ -7,6 +7,10 @@ business. The repo ships two — `StaticRouteResolver` (trust the manifest) and
 operator can point a deployment at a third, private one without forking
 anything. This page documents that mechanism.
 
+For a conceptual overview of how routes are selected, ranked, and verified
+against on-chain evidence, see the [Route planner guide](route-planner.md)
+and [RFC 0004: Smart router](rfcs/0004-smart-router.md).
+
 ## The RouteResolver interface
 
 Whether a resolver is built in or loaded through `loadResolver`, it must satisfy
@@ -228,6 +232,9 @@ they describe. vitest is a peer dependency of the `./testing` subpath only;
 importing `@corridor/router` alone does not pull it in.
 
 ## Writing your own
+
+For an end-to-end walkthrough of the 6 steps, operational labels, and ranking
+rules, see the [Route planner guide](route-planner.md). To implement your own:
 
 1. Create a file (any path or package you control).
 2. Export `apiVersion` (import it from `@corridor/router` so a future contract
