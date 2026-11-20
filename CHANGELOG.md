@@ -73,6 +73,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   provenance and an SBOM, after the same smoke test. Actions pinned by SHA.
 - Not yet run on a Docker daemon by the author; the CI `docker` job is the first build.
 
+### Added — five Asia-Pacific anchors in the fleet ([#666](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/666))
+
+- `contracts/anchors.json` gains `audd.digital` (Novatti's AUDD, Australia),
+  `cebuanalhuillier.com` (Cebuana, Philippines), `perahub.com.ph` (PeraHub, Philippines),
+  `ripplefox.com` (RippleFox, a CNY issuer) and `fchain.io` (FChain's Firefly). The first
+  three come from the Stellar Anchor Directory and the last two from the `stellar.toml` on
+  their own sites. The file's `$comment` records the source and the 2026-11-20 probe result
+  for each.
+- What the probe found: `fchain.io` passes `toml_fetch` and `sep6_info`; `audd.digital` and
+  `ripplefox.com` publish a toml with no SEP endpoint; `cebuanalhuillier.com` (HTTP 404) and
+  `perahub.com.ph` (its certificate does not validate) publish none, so the SEP-31 the
+  directory lists for them is unverified. No corridor manifest is added.
+- `docs/mainnet-registry.md` restates the fee budget for a 24-anchor fleet.
+
 ### Added — `@corridor/otel`, OpenTelemetry adapters for `Metrics` and `Logger` ([#273](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/273))
 
 - New package `@corridor/otel`: `otelMetrics(meter)` (counter per name for `increment`,
