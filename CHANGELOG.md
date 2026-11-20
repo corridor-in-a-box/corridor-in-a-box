@@ -7,6 +7,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
+### Added — rate collector loop with 15-minute schedule, jitter, and overlap guard ([#593](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/593))
+
+- Added `RateCollectorLoop` in `@corridor/engine` implementing an always-on collection process that runs on a 15-minute schedule (RFC 0004 §3).
+- Added startup jitter support to spread out execution and avoid synchronized traffic spikes.
+- Added an overlap guard that skips runs if a previous collection cycle is still in flight.
+- Added graceful shutdown on `SIGTERM` / `SIGINT` that drains in-flight runs cleanly.
+- Added `examples/run-rate-collector.ts` entry point script with `pnpm rate:collector`.
+- Documented `RATE_COLLECTOR_INTERVAL_MS`, `RATE_COLLECTOR_INTERVAL_SECONDS`, and `RATE_COLLECTOR_JITTER_MS` in `.env.example`.
+
 ### Fixed — stale documentation and comments
 
 - Docs said no transition enters `refund_pending` and that `refunded` is reachable only when

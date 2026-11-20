@@ -35,6 +35,7 @@
     "example:stub": "tsx examples/run-stub-adapter.ts",
     "testnet": "tsx examples/run-testnet.ts",
     "serve": "tsx examples/run-service.ts",
+    "rate:collector": "tsx examples/run-rate-collector.ts",
     "verify:settle": "tsx examples/verify-settle-leg.ts",
     "verify:corridor": "tsx examples/verify-corridor.ts",
     "fund:testnet": "tsx examples/fund-testnet-sender.ts",

@@ -123,3 +123,18 @@ export {
   ExternalQuoteProvider,
 } from "@corridor/adapter-kit";
 export { checkCompatibility } from "./compat";
+export {
+  DEFAULT_COLLECTOR_INTERVAL_MS,
+  DEFAULT_MAX_JITTER_MS,
+  RateCollectorLoop,
+  startRateCollectorLoop,
+  parseCollectorInterval,
+  parseCollectorJitter,
+  defaultSleep,
+  type CollectorStep,
+  type CollectorStepFn,
+  type CollectorStepResult,
+  type RateCollectorCycleResult,
+  type RateCollectorLoopOptions,
+  type RateCollectorLoopStats,
+} from "./rate-collector-loop";
