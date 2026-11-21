@@ -47,6 +47,13 @@ export const PROBE_NAMES = [
   "sep6_auth",
 ] as const;
 
+/**
+ * Descriptive User-Agent identifying the probe and linking to this repository,
+ * sent on every outbound HTTP request.
+ */
+export const PROBE_USER_AGENT =
+  "corridor-in-a-box-probe (+https://github.com/corridor-in-a-box/corridor-in-a-box)";
+
 export type SepNumber = (typeof SEP_NUMBERS)[number];
 export type ProbeName = (typeof PROBE_NAMES)[number];
 
@@ -104,6 +111,8 @@ export interface ProbeOptions {
    *  endpoint performs the handshake correctly. */
   keypair?: Keypair;
   now?: () => number;
+  /** Custom User-Agent header string. Defaults to PROBE_USER_AGENT. */
+  userAgent?: string;
 }
 
 const ZERO_HASH = "0".repeat(64);
@@ -144,6 +153,7 @@ export async function probeAnchor(
   const doFetch = opts.fetchImpl ?? fetch;
   const timeoutMs = opts.timeoutMs ?? 15_000;
   const now = opts.now ?? (() => Date.now());
+  const userAgent = opts.userAgent ?? PROBE_USER_AGENT;
   const outcomes: ProbeOutcome[] = [];
 
   let seps = 0;
@@ -154,11 +164,18 @@ export async function probeAnchor(
   // Single choke point: every endpoint fetched past the initial SEP-1 request
   // is a URL the anchor's own stellar.toml supplied. Refuse anything that
   // isn't a public https:// host before it's dereferenced — see url-safety.ts.
-  const get = (url: string, init?: RequestInit) => {
+  const get = (
+    url: string,
+    init?: Omit<RequestInit, "headers"> & { headers?: Record<string, string> },
+  ) => {
     if (!isSafeUrl(url)) {
       return Promise.reject(new Error(`refusing to fetch unsafe url: ${url}`));
     }
-    return doFetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+    const headers: Record<string, string> = {
+      "user-agent": userAgent,
+      ...init?.headers,
+    };
+    return doFetch(url, { ...init, headers, signal: AbortSignal.timeout(timeoutMs) });
   };
 
   const record = (probe: ProbeName, passed: boolean, detail: string) => {
