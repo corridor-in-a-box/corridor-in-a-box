@@ -44,6 +44,8 @@ export interface AnchorAttestation {
   staleness: number;
   /** Advertises SEP-31 AND passed the SEP-31 probe. Not the same as advertising it. */
   servesSep31: boolean;
+  /** Short reason why toml_fetch failed, if known. */
+  tomlFailureReason?: string;
 }
 
 const NULL_ACCOUNT = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";

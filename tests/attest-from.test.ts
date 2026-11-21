@@ -55,6 +55,21 @@ describe("attest-from probe results loader (#238)", () => {
     expect(results[0].domain).toBe("testanchor.stellar.org");
   });
 
+  it("preserves tomlFailureReason when present", () => {
+    const failedResult: ProbeResult = {
+      domain: "failed.example.org",
+      seps: 0,
+      probesRun: probeBit("toml_fetch"),
+      probesPassed: 0,
+      tomlHash: VALID_TOML_HASH,
+      outcomes: [{ probe: "toml_fetch", passed: false, detail: "HTTP 403" }],
+      tomlFailureReason: "http_403",
+    };
+    const results = parseProbeResults([failedResult]);
+    expect(results).toHaveLength(1);
+    expect(results[0].tomlFailureReason).toBe("http_403");
+  });
+
   it("rejects dishonest results where probesPassed exceeds probesRun", () => {
     const dishonest: ProbeResult = {
       domain: "dishonest.anchor.org",
@@ -215,6 +230,68 @@ describe("attest-from metadata round trip (#242)", () => {
     );
     expect(() => parseProbeResults({ ...sampleResult, receiveAssets: ["NGN", ""] })).toThrow(
       /invalid receiveAssets/,
+    );
+  });
+
+  it("parses array format of seps, probesRun, and probesPassed", () => {
+    const arrayFormat = {
+      domain: "example.com",
+      seps: [1, 31],
+      probesRun: ["toml_fetch", "sep31_info"],
+      probesPassed: ["toml_fetch"],
+      tomlHash: "0".repeat(64),
+      tomlFailureReason: "http_503",
+    };
+    const parsed = parseProbeResults(arrayFormat);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].domain).toBe("example.com");
+    expect(parsed[0].tomlFailureReason).toBe("http_503");
+  });
+
+  it("rejects unknown SEP in array format", () => {
+    const invalidSep = {
+      domain: "example.com",
+      seps: [999],
+      probesRun: ["toml_fetch"],
+      probesPassed: [],
+      tomlHash: "0".repeat(64),
+    };
+    expect(() => parseProbeResults(invalidSep)).toThrow(/unknown SEP/);
+  });
+
+  it("rejects unknown probe name in array format", () => {
+    const invalidProbeRun = {
+      domain: "example.com",
+      seps: [1],
+      probesRun: ["invalid_probe_name"],
+      probesPassed: [],
+      tomlHash: "0".repeat(64),
+    };
+    expect(() => parseProbeResults(invalidProbeRun)).toThrow(/unknown probe name/);
+
+    const invalidProbePassed = {
+      domain: "example.com",
+      seps: [1],
+      probesRun: ["toml_fetch"],
+      probesPassed: ["invalid_probe_name"],
+      tomlHash: "0".repeat(64),
+    };
+    expect(() => parseProbeResults(invalidProbePassed)).toThrow(/unknown probe name/);
+  });
+
+  it("validates outcome array entries", () => {
+    const invalidOutcome = {
+      ...sampleResult,
+      outcomes: ["not an object"],
+    };
+    expect(() => parseProbeResults(invalidOutcome)).toThrow(/outcome at index 0 is invalid/);
+
+    const invalidOutcomeFields = {
+      ...sampleResult,
+      outcomes: [{ probe: 123, passed: "not a bool", detail: false }],
+    };
+    expect(() => parseProbeResults(invalidOutcomeFields)).toThrow(
+      /outcome at index 0 has invalid fields/,
     );
   });
 });

@@ -13,6 +13,7 @@ import {
   Account,
 } from "@stellar/stellar-sdk";
 import {
+  classifyTomlFetchError,
   decodeProbes,
   decodeSeps,
   formatProbeResultJson,
@@ -23,6 +24,7 @@ import {
   sepBit,
   tomlHash as sharedTomlHash,
   tomlValue,
+  validateToml,
   PROBE_NAMES,
   type ProbeName,
   type ProbeResult,
@@ -567,5 +569,363 @@ describe("formatProbeResultJson & parseProbeArgs (#232)", () => {
         probesPassed: fixture.probesPassed,
       });
     });
+
+    it("includes tomlFailureReason when present", () => {
+      const failedFixture: ProbeResult = {
+        domain: "broken.org",
+        seps: 0,
+        probesRun: probeBit("toml_fetch"),
+        probesPassed: 0,
+        tomlHash: "0".repeat(64),
+        outcomes: [{ probe: "toml_fetch", passed: false, detail: "HTTP 403" }],
+        tomlFailureReason: "http_403",
+      };
+      const jsonStr = formatProbeResultJson(failedFixture);
+      const parsed = JSON.parse(jsonStr);
+      expect(parsed.tomlFailureReason).toBe("http_403");
+    });
+  });
+});
+
+describe("classifyTomlFetchError (#662)", () => {
+  describe("http_<status> category", () => {
+    it("classifies explicit numeric HTTP status", () => {
+      expect(classifyTomlFetchError(new Error("Failed"), 403)).toBe("http_403");
+      expect(classifyTomlFetchError(new Error("Failed"), 404)).toBe("http_404");
+      expect(classifyTomlFetchError(new Error("Failed"), 500)).toBe("http_500");
+      expect(classifyTomlFetchError(new Error("Failed"), 502)).toBe("http_502");
+    });
+
+    it("classifies error with status property", () => {
+      const err = Object.assign(new Error("Not Found"), { status: 404 });
+      expect(classifyTomlFetchError(err)).toBe("http_404");
+    });
+
+    it("classifies HTTP <status> in error message", () => {
+      expect(classifyTomlFetchError(new Error("HTTP 403"))).toBe("http_403");
+      expect(classifyTomlFetchError(new Error("Request failed with HTTP 503"))).toBe(
+        "http_503",
+      );
+      expect(classifyTomlFetchError(new Error("status: 400 Bad Request"))).toBe("http_400");
+    });
+  });
+
+  describe("timeout category", () => {
+    it("classifies TimeoutError and AbortError", () => {
+      const timeoutErr = new Error("The operation was aborted");
+      timeoutErr.name = "TimeoutError";
+      expect(classifyTomlFetchError(timeoutErr)).toBe("timeout");
+
+      const abortErr = new Error("The user aborted a request");
+      abortErr.name = "AbortError";
+      expect(classifyTomlFetchError(abortErr)).toBe("timeout");
+    });
+
+    it("classifies timeout codes like ETIMEDOUT and undici timeout codes", () => {
+      const err1 = Object.assign(new Error("connect timeout"), { code: "ETIMEDOUT" });
+      expect(classifyTomlFetchError(err1)).toBe("timeout");
+
+      const err2 = Object.assign(new Error("Headers timeout"), {
+        code: "UND_ERR_HEADERS_TIMEOUT",
+      });
+      expect(classifyTomlFetchError(err2)).toBe("timeout");
+
+      const err3 = Object.assign(new Error("Connect timeout"), {
+        code: "UND_ERR_CONNECT_TIMEOUT",
+      });
+      expect(classifyTomlFetchError(err3)).toBe("timeout");
+    });
+
+    it("classifies timeout errors wrapped in cause", () => {
+      const cause = Object.assign(new Error("timed out"), { code: "UND_ERR_CONNECT_TIMEOUT" });
+      const err = new TypeError("fetch failed");
+      err.cause = cause;
+      expect(classifyTomlFetchError(err)).toBe("timeout");
+    });
+
+    it("classifies timeout keywords in message", () => {
+      expect(classifyTomlFetchError(new Error("connection timed out"))).toBe("timeout");
+      expect(classifyTomlFetchError(new Error("request timeout"))).toBe("timeout");
+    });
+  });
+
+  describe("dns category", () => {
+    it("classifies standard DNS lookup codes", () => {
+      for (const code of ["ENOTFOUND", "EAI_AGAIN", "EAI_NONAME", "ENODATA", "EAI_FAIL"]) {
+        const err = Object.assign(new Error("DNS failed"), { code });
+        expect(classifyTomlFetchError(err)).toBe("dns");
+      }
+    });
+
+    it("classifies DNS lookup errors wrapped in cause", () => {
+      const cause = Object.assign(new Error("getaddrinfo ENOTFOUND a.example"), {
+        code: "ENOTFOUND",
+      });
+      const err = new TypeError("fetch failed");
+      err.cause = cause;
+      expect(classifyTomlFetchError(err)).toBe("dns");
+    });
+
+    it("classifies DNS keywords in message", () => {
+      expect(classifyTomlFetchError(new Error("getaddrinfo ENOTFOUND bad.host"))).toBe("dns");
+    });
+  });
+
+  describe("tls category", () => {
+    it("classifies certificate and TLS error codes", () => {
+      for (const code of [
+        "CERT_HAS_EXPIRED",
+        "ERR_TLS_CERT_ALTNAME_INVALID",
+        "DEPTH_ZERO_SELF_SIGNED_CERT",
+        "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+        "SELF_SIGNED_CERT_IN_CHAIN",
+        "ERR_SSL_PROTOCOL_ERROR",
+      ]) {
+        const err = Object.assign(new Error("TLS failure"), { code });
+        expect(classifyTomlFetchError(err)).toBe("tls");
+      }
+    });
+
+    it("classifies TLS errors wrapped in cause", () => {
+      const cause = Object.assign(new Error("certificate has expired"), {
+        code: "CERT_HAS_EXPIRED",
+      });
+      const err = new TypeError("fetch failed");
+      err.cause = cause;
+      expect(classifyTomlFetchError(err)).toBe("tls");
+    });
+
+    it("classifies TLS / SSL / certificate keywords in message", () => {
+      expect(classifyTomlFetchError(new Error("SSL handshake failed"))).toBe("tls");
+      expect(classifyTomlFetchError(new Error("self-signed certificate in chain"))).toBe(
+        "tls",
+      );
+    });
+  });
+
+  describe("parse category", () => {
+    it("classifies SyntaxError", () => {
+      expect(classifyTomlFetchError(new SyntaxError("invalid TOML"))).toBe("parse");
+    });
+
+    it("classifies parse and syntax keywords in message", () => {
+      expect(classifyTomlFetchError(new Error("Failed to parse TOML"))).toBe("parse");
+      expect(classifyTomlFetchError(new Error("malformed document"))).toBe("parse");
+      expect(classifyTomlFetchError(new Error("invalid toml line: missing '='"))).toBe(
+        "parse",
+      );
+    });
+
+    it("classifies generic errors as parse fallback", () => {
+      expect(classifyTomlFetchError(new Error("Unknown error"))).toBe("parse");
+      expect(classifyTomlFetchError("Unknown error string")).toBe("parse");
+      expect(classifyTomlFetchError(12345)).toBe("parse");
+      expect(classifyTomlFetchError({ random: true })).toBe("parse");
+    });
+  });
+});
+
+describe("validateToml (#662)", () => {
+  it("passes full valid stellar.toml", () => {
+    expect(() => validateToml(FULL_TOML)).not.toThrow();
+  });
+
+  it("passes minimal valid toml", () => {
+    expect(() => validateToml('VERSION = "2.0.0"\n')).not.toThrow();
+  });
+
+  it("allows valid multi-line arrays", () => {
+    const toml = `
+VERSION = "2.0.0"
+ACCOUNTS = [
+  "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+  "GCHLHDBOKG2JWMJQBTLSL5XG6NO7ESXI2TAQKZXCXWXB5WI2X6W233PR",
+]
+`;
+    expect(() => validateToml(toml)).not.toThrow();
+  });
+
+  it("allows table headers and array-of-tables with comments", () => {
+    const toml = `
+# Top comment
+VERSION = "2.0.0" # version
+
+[DOCUMENTATION] # documentation section
+ORG_NAME = "Test Org"
+ORG_URL = "https://example.com"
+
+[[CURRENCIES]] # first currency
+code = "USD"
+issuer = "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+
+[[CURRENCIES]] # second currency
+code = "EUR"
+issuer = "GCHLHDBOKG2JWMJQBTLSL5XG6NO7ESXI2TAQKZXCXWXB5WI2X6W233PR"
+`;
+    expect(() => validateToml(toml)).not.toThrow();
+  });
+
+  it("allows comments and brackets inside string literals without misinterpreting them", () => {
+    const toml = `
+VERSION = "2.0.0"
+MESSAGE = "hello # this is not a comment [not array]"
+LITERAL = 'another # comment [bracket]'
+`;
+    expect(() => validateToml(toml)).not.toThrow();
+  });
+
+  it("passes valid toml with multi-line strings", () => {
+    const toml = `
+VERSION = "2.0.0"
+ESCAPED = "hello \\"world\\""
+SAME_LINE = """single"""
+SAME_LITERAL = '''single'''
+[DOCUMENTATION]
+ORG_DESCRIPTION = """
+A long multi-line
+description of the anchor
+"""
+MULTI_LITERAL = '''
+line 1
+line 2
+'''
+`;
+    expect(() => validateToml(toml)).not.toThrow();
+  });
+
+  it("throws SyntaxError on unclosed multi-line strings", () => {
+    expect(() => validateToml('VERSION = "2.0.0"\nDESC = """\nunclosed')).toThrowError(
+      /unclosed multi-line string/,
+    );
+    expect(() => validateToml("VERSION = \"2.0.0\"\nDESC = '''\nunclosed")).toThrowError(
+      /unclosed multi-line string/,
+    );
+  });
+
+  it("throws SyntaxError on unclosed array", () => {
+    const toml = `
+VERSION = "2.0.0"
+ACCOUNTS = [
+  "GA...",
+`;
+    expect(() => validateToml(toml)).toThrowError(/unclosed array/);
+  });
+
+  it("throws SyntaxError on unmatched closing bracket", () => {
+    const toml = `
+VERSION = "2.0.0"
+ACCOUNTS = [
+  "GA...",
+]]
+`;
+    expect(() => validateToml(toml)).toThrowError(/unmatched closing bracket/);
+  });
+
+  it("throws SyntaxError on empty toml content", () => {
+    expect(() => validateToml("   \n  \t  ")).toThrowError(SyntaxError);
+  });
+
+  it("throws SyntaxError on HTML response", () => {
+    expect(() => validateToml("<!DOCTYPE html><html><body>Error</body></html>")).toThrowError(
+      /HTML\/XML/,
+    );
+    expect(() => validateToml("<html><body>Landing Page</body></html>")).toThrowError(
+      /HTML\/XML/,
+    );
+  });
+
+  it("throws SyntaxError on unclosed table header", () => {
+    expect(() => validateToml("[DOCUMENTATION\nKEY = 'val'")).toThrowError(
+      /invalid table header/,
+    );
+  });
+
+  it("throws SyntaxError on line missing '='", () => {
+    expect(() => validateToml("VERSION\nKEY = 'val'")).toThrowError(/missing '='/);
+  });
+
+  it("throws SyntaxError on line with missing value", () => {
+    expect(() => validateToml("VERSION = \nKEY = 'val'")).toThrowError(/missing value/);
+  });
+});
+
+describe("probeAnchor tomlFailureReason (#662)", () => {
+  it("records http_404 when toml returns 404", async () => {
+    const fetchImpl = (async () => new Response("Not Found", { status: 404 })) as typeof fetch;
+    const r = await probeAnchor("a.example", { fetchImpl });
+    expect(r.tomlFailureReason).toBe("http_404");
+  });
+
+  it("records http_403 when toml returns 403", async () => {
+    const fetchImpl = (async () => new Response("Forbidden", { status: 403 })) as typeof fetch;
+    const r = await probeAnchor("a.example", { fetchImpl });
+    expect(r.tomlFailureReason).toBe("http_403");
+  });
+
+  it("records timeout when fetch times out", async () => {
+    const fetchImpl = (async () => {
+      const err = new Error("The operation was aborted");
+      err.name = "TimeoutError";
+      throw err;
+    }) as typeof fetch;
+    const r = await probeAnchor("a.example", { fetchImpl });
+    expect(r.tomlFailureReason).toBe("timeout");
+  });
+
+  it("records dns when fetch fails with ENOTFOUND", async () => {
+    const fetchImpl = (async () => {
+      const err = new TypeError("fetch failed");
+      err.cause = Object.assign(new Error("getaddrinfo ENOTFOUND a.example"), {
+        code: "ENOTFOUND",
+      });
+      throw err;
+    }) as typeof fetch;
+    const r = await probeAnchor("a.example", { fetchImpl });
+    expect(r.tomlFailureReason).toBe("dns");
+  });
+
+  it("records tls when fetch fails with certificate error", async () => {
+    const fetchImpl = (async () => {
+      const err = new TypeError("fetch failed");
+      err.cause = Object.assign(new Error("certificate has expired"), {
+        code: "CERT_HAS_EXPIRED",
+      });
+      throw err;
+    }) as typeof fetch;
+    const r = await probeAnchor("a.example", { fetchImpl });
+    expect(r.tomlFailureReason).toBe("tls");
+  });
+
+  it("records parse when toml returns HTML with 200 OK", async () => {
+    const fetchImpl = (async (url: string | URL) => {
+      if (String(url).includes("stellar.toml")) {
+        return new Response("<!DOCTYPE html><html><body>Error</body></html>", { status: 200 });
+      }
+      return new Response("{}", { status: 404 });
+    }) as typeof fetch;
+    const r = await probeAnchor("a.example", { fetchImpl });
+    expect(r.tomlFailureReason).toBe("parse");
+  });
+
+  it("records parse when toml has malformed syntax", async () => {
+    const fetchImpl = (async (url: string | URL) => {
+      if (String(url).includes("stellar.toml")) {
+        return new Response("broken toml line with no equals", { status: 200 });
+      }
+      return new Response("{}", { status: 404 });
+    }) as typeof fetch;
+    const r = await probeAnchor("a.example", { fetchImpl });
+    expect(r.tomlFailureReason).toBe("parse");
+  });
+
+  it("leaves tomlFailureReason undefined on successful probe", async () => {
+    const fetchImpl = (async (url: string | URL) => {
+      if (String(url).includes("stellar.toml")) {
+        return new Response(FULL_TOML, { status: 200 });
+      }
+      return new Response("{}", { status: 404 });
+    }) as typeof fetch;
+    const r = await probeAnchor("a.example", { fetchImpl });
+    expect(r.tomlFailureReason).toBeUndefined();
   });
 });
