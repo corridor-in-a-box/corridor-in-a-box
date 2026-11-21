@@ -98,3 +98,16 @@ export {
 
 export { createAdapterRegistry } from "./adapters";
 export type { AdapterFactory, AdapterRegistry } from "./adapters";
+
+// Lane check v1: authorised GET /sep31/info probe (RFC 0004 D6)
+export {
+  checkLane,
+  checkSep31Lane,
+  laneCheck,
+  probeSep31Lane,
+  type LaneCheckResult,
+  type LaneCheckOptions,
+  type LaneCheckTarget,
+  type LaneCheckStep,
+  type LaneCheckStepResult,
+} from "@corridor/probe";

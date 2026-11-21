@@ -417,3 +417,4 @@ export function parseProbeArgs(args: readonly string[]): { domain?: string; json
 
 export * from "./report";
 export * from "./loader";
+export * from "./lane-check";
