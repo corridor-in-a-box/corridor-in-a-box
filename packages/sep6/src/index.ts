@@ -965,6 +965,7 @@ export class Sep6Adapter implements AnchorAdapter {
         typeof tx.amount_in === "string" ? tx.amount_in : undefined,
       );
       const amountIn = amountString(tx.amount_in);
+      const amountOut = amountString((tx as { amount_out?: unknown }).amount_out);
       const depositAddress = nonEmptyString(tx.withdraw_anchor_account);
       const memo = nonEmptyString(tx.withdraw_memo);
       const memoType = parseMemoType(tx.withdraw_memo_type);
@@ -973,6 +974,7 @@ export class Sep6Adapter implements AnchorAdapter {
         ...mapped,
         ...(refunds ? { refunds } : {}),
         ...(amountIn !== undefined ? { amountIn: { asset, amount: amountIn } } : {}),
+        ...(amountOut !== undefined ? { amountOut: { asset, amount: amountOut } } : {}),
         ...(depositAddress !== undefined ? { depositAddress } : {}),
         ...(memo !== undefined ? { memo } : {}),
         ...(memoType !== undefined ? { memoType } : {}),

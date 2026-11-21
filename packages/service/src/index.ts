@@ -761,6 +761,7 @@ export function createService(options: ServiceOptions): Service {
           // `${code}: ${message}` and the message carries anchor URLs, upstream
           // HTTP bodies and other internals the caller has no business seeing.
           error: errorCode(run.lastError),
+          ...(run.estimateGap !== undefined ? { estimate_gap: run.estimateGap } : {}),
         },
       };
     }

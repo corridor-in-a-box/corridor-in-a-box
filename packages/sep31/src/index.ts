@@ -488,6 +488,8 @@ export class Sep31Adapter implements AnchorAdapter {
           status: string;
           amount_in?: unknown;
           amount_in_asset?: unknown;
+          amount_out?: unknown;
+          amount_out_asset?: unknown;
           refunds?: unknown;
           stellar_account_id?: unknown;
           stellar_memo?: unknown;
@@ -517,6 +519,11 @@ export class Sep31Adapter implements AnchorAdapter {
       // rather than guessed — including a numeric amount_in, which has already
       // been through a float64.
       const amountIn = amountString(tx.amount_in);
+      const amountOut = amountString(tx.amount_out);
+      const outAsset =
+        typeof tx.amount_out_asset === "string" && tx.amount_out_asset
+          ? tx.amount_out_asset
+          : this.anchor.asset;
       const depositAddress = nonEmptyString(tx.stellar_account_id);
       const memo = nonEmptyString(tx.stellar_memo);
       const memoType = parseMemoType(tx.stellar_memo_type);
@@ -525,6 +532,9 @@ export class Sep31Adapter implements AnchorAdapter {
         ...mapped,
         ...(refunds ? { refunds } : {}),
         ...(amountIn !== undefined ? { amountIn: { asset, amount: amountIn } } : {}),
+        ...(amountOut !== undefined
+          ? { amountOut: { asset: outAsset, amount: amountOut } }
+          : {}),
         ...(depositAddress !== undefined ? { depositAddress } : {}),
         ...(memo !== undefined ? { memo } : {}),
         ...(memoType !== undefined ? { memoType } : {}),

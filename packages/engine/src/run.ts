@@ -11,6 +11,7 @@ import {
   fail,
   isSettleableAmount,
   ok,
+  subAmounts,
   type CorridorError,
   type Money,
   type Outcome,
@@ -162,6 +163,12 @@ export interface EngineDeps {
    * evaluation while recording `gate.skipped` in the audit log and emitting a warning.
    */
   unsafeSkipPreSettleGate?: boolean;
+  /**
+   * When true, the business guarantees estimated prices to the customer and absorbs
+   * rate differences between the guaranteed amount and anchor payout (RFC 0004 D4).
+   * Default setting for runs executed with these deps.
+   */
+  guaranteeEstimates?: boolean;
 }
 
 export interface RunResult {
@@ -173,6 +180,12 @@ export interface RunResult {
   readonly settlementRef?: SettlementRef;
   /** Ordered list of states the run passed through — useful for the example/CLI. */
   readonly trail: readonly CorridorState[];
+  /**
+   * Difference between guaranteed/shown payout and actual anchor payout (RFC 0004 D4).
+   * Recorded when guaranteeEstimates is on. Positive = gain, negative = loss, zero = exact match.
+   */
+  readonly estimateGap?: string;
+  readonly estimate_gap?: string;
 }
 
 export interface ExecuteOptions {
@@ -215,6 +228,18 @@ export interface ExecuteOptions {
    * job — this only keeps the ids correlatable until it is.
    */
   traceparent?: string;
+  /**
+   * When true, guarantee estimated prices and record estimate_gap on the run (RFC 0004 D4).
+   */
+  guaranteeEstimates?: boolean;
+  /**
+   * Explicit guaranteed payout amount shown to customer. Defaults to the quote's destAmount.
+   */
+  guaranteedAmount?: string | Money;
+  /**
+   * Explicit actual payout amount delivered by anchor, overriding TransactionStatus.amountOut.
+   */
+  actualAmount?: string | Money;
 }
 
 /** The `cause` of a `DRY_RUN_COMPLETE` error: what the gate said before the run stopped. */
@@ -568,6 +593,28 @@ export async function execute(
   run.quoteExpiresAt = q.value.expiresAt;
   run.quoteFirm = q.value.firm;
   run.settlementAmount = q.value.sourceAmount.amount;
+
+  const intentAny = intent as unknown as {
+    guaranteeEstimates?: boolean;
+    guaranteedAmount?: string | { amount: string };
+  };
+  const guaranteeEstimates = Boolean(
+    opts.guaranteeEstimates ?? deps.guaranteeEstimates ?? intentAny.guaranteeEstimates,
+  );
+  let guaranteedAmountStr: string | undefined;
+  if (guaranteeEstimates) {
+    if (typeof opts.guaranteedAmount === "string") {
+      guaranteedAmountStr = opts.guaranteedAmount;
+    } else if (opts.guaranteedAmount && typeof opts.guaranteedAmount === "object") {
+      guaranteedAmountStr = opts.guaranteedAmount.amount;
+    } else if (typeof intentAny.guaranteedAmount === "string") {
+      guaranteedAmountStr = intentAny.guaranteedAmount;
+    } else if (intentAny.guaranteedAmount && typeof intentAny.guaranteedAmount === "object") {
+      guaranteedAmountStr = intentAny.guaranteedAmount.amount;
+    } else {
+      guaranteedAmountStr = q.value.destAmount?.amount;
+    }
+  }
   {
     const t = await advance("quoted");
     if (!t.ok) return die(t.error);
@@ -857,6 +904,27 @@ export async function execute(
       }),
     );
     if (!r.ok) return finishFailure(r.error);
+
+    if (guaranteeEstimates && guaranteedAmountStr) {
+      const rAny = r.value as unknown as { amount_out?: string };
+      const openedAny = opened.value as unknown as { amount_out?: string };
+      const actualAmount =
+        (typeof opts.actualAmount === "string"
+          ? opts.actualAmount
+          : opts.actualAmount?.amount) ??
+        r.value.amountOut?.amount ??
+        (typeof rAny.amount_out === "string" ? rAny.amount_out : undefined) ??
+        opened.value.amountOut?.amount ??
+        (typeof openedAny.amount_out === "string" ? openedAny.amount_out : undefined);
+      if (actualAmount !== undefined) {
+        const diff = subAmounts(actualAmount, guaranteedAmountStr);
+        if (diff.ok) {
+          run.estimateGap = diff.value;
+          run.estimate_gap = diff.value;
+        }
+      }
+    }
+
     {
       const t = await advance("reconciled");
       if (!t.ok) return die(t.error);
@@ -1230,6 +1298,9 @@ function toResult(run: StoredRun, trail: readonly CorridorState[]): RunResult {
     settlementKind: run.settlementKind,
     settlementRef: run.settlementRef,
     trail,
+    ...(run.estimateGap !== undefined
+      ? { estimateGap: run.estimateGap, estimate_gap: run.estimateGap }
+      : {}),
   };
 }
 
