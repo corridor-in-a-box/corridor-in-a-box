@@ -97,6 +97,33 @@
     "returns HTTP 404 (https://bitso.com/.well-known/stellar.toml), so no SEP-31",
     "receive capability was verified and no corridor manifest was written.",
     "",
+    "aps.money, circle.com, triple-a.io, whitebit.com, and moonpay.com were added",
+    "for the Europe anchor fleet expansion (#667):",
+    "aps.money is APS (Advanced Payment Solutions; European € EUR on/off-ramp / Ukraine),",
+    "sourced from https://anchors.stellar.org/?search=APS. Probed 2026-11-20: TOML fetch passes",
+    "(sha256 3a5fd090d4b749b7...), advertises SEP-1 and issues APSEURM/APSUAHM, but publishes",
+    "no SEP-31 receive endpoint; no corridor manifest is written.",
+    "",
+    "circle.com is Circle (France/EU EURC and USDC issuer; sourced from",
+    "https://circle.com/.well-known/stellar.toml). Probed 2026-11-20: TOML fetch passes",
+    "(sha256 f070510b81d12db2...), advertises SEP-1, no SEP-31 receive endpoint",
+    "is published; no corridor manifest is written.",
+    "",
+    "triple-a.io is Triple-A (licensed crypto payment gateway / EU ramp; sourced from",
+    "https://anchors.stellar.org/?search=Triple-A). Probed 2026-11-20: toml_fetch returns",
+    "HTTP 404 (https://triple-a.io/.well-known/stellar.toml), so no SEP-31 receive",
+    "capability was verified and no corridor manifest was written.",
+    "",
+    "whitebit.com is WhiteBit (Lithuania, Ukraine / European exchange; sourced from",
+    "https://anchors.stellar.org/?search=WhiteBit). Probed 2026-11-20: TOML fetch returns",
+    "HTTP 403 (Cloudflare challenge on https://whitebit.com/.well-known/stellar.toml), so no",
+    "SEP-31 receive capability was verified and no corridor manifest was written.",
+    "",
+    "moonpay.com is MoonPay (European Union on/off-ramp; sourced from",
+    "https://anchors.stellar.org/?search=MoonPay). Probed 2026-11-20: toml_fetch returns",
+    "HTTP 404 (https://moonpay.com/.well-known/stellar.toml), so no SEP-31 receive",
+    "capability was verified and no corridor manifest was written.",
+    "",
     "Each entry in `anchors` records curator-declared context (name, ISO 3166-1",
     "alpha-2 countries, kind, directory/manifest source, and date added). Countries",
     "and `kind` are curator-declared metadata, NOT attested facts; `domains` mirrors",
@@ -121,7 +148,12 @@
     "arf.one",
     "stellar-sep-24.banxa.com",
     "flutterwave.com",
-    "bitso.com"
+    "bitso.com",
+    "aps.money",
+    "circle.com",
+    "triple-a.io",
+    "whitebit.com",
+    "moonpay.com"
   ],
   "anchors": [
     {
@@ -275,6 +307,46 @@
       "kind": "other",
       "source": "https://anchors.stellar.org/?search=Bitso",
       "added": "2026-10-22"
+    },
+    {
+      "domain": "aps.money",
+      "name": "APS",
+      "countries": ["AT", "BE", "DE", "ES", "FR", "IT", "NL", "PL", "UA"],
+      "kind": "other",
+      "source": "https://anchors.stellar.org/?search=APS",
+      "added": "2026-11-20"
+    },
+    {
+      "domain": "circle.com",
+      "name": "Circle",
+      "countries": ["FR"],
+      "kind": "other",
+      "source": "https://circle.com/.well-known/stellar.toml",
+      "added": "2026-11-20"
+    },
+    {
+      "domain": "triple-a.io",
+      "name": "Triple-A",
+      "countries": ["AT", "BE", "DE", "ES", "FR", "IT", "NL"],
+      "kind": "other",
+      "source": "https://anchors.stellar.org/?search=Triple-A",
+      "added": "2026-11-20"
+    },
+    {
+      "domain": "whitebit.com",
+      "name": "WhiteBit",
+      "countries": ["LT", "UA"],
+      "kind": "other",
+      "source": "https://anchors.stellar.org/?search=WhiteBit",
+      "added": "2026-11-20"
+    },
+    {
+      "domain": "moonpay.com",
+      "name": "MoonPay",
+      "countries": ["AT", "BE", "DE", "ES", "FR", "GB", "IT", "NL"],
+      "kind": "other",
+      "source": "https://anchors.stellar.org/?search=MoonPay",
+      "added": "2026-11-20"
     }
   ]
 }
