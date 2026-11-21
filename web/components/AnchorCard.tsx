@@ -10,6 +10,7 @@ import {
 } from "@/lib/registry";
 import { approxLedgerDuration } from "@/lib/freshness";
 import { addressUrl, ledgerUrl, shortAddress } from "@/lib/explorer";
+import { NO_TOML_HASH, canJudgeSep31, displayTomlHash, sepSummary } from "@/lib/anchor-status";
 
 /**
  * One attested anchor.
@@ -18,11 +19,15 @@ import { addressUrl, ledgerUrl, shortAddress } from "@/lib/explorer";
  * merge: what the anchor's stellar.toml ADVERTISES, and what actually WORKED
  * when someone called it. Showing only the first is what made a corridor
  * pointing at a non-existent domain look healthy.
+ *
+ * The same goes for an empty SEP list: when the probe could not read the
+ * stellar.toml, the card says so instead of claiming the anchor has no endpoints.
  */
 export function AnchorCard({ anchor }: { anchor: AnchorAttestation }) {
   const stale = anchor.staleness > STALE_AFTER_LEDGERS;
   // Green requires the capability to be advertised AND probed green AND fresh.
   const usable = anchor.servesSep31 && !stale;
+  const tomlHash = displayTomlHash(anchor);
 
   return (
     <Card className="flex flex-col gap-4">
@@ -30,7 +35,7 @@ export function AnchorCard({ anchor }: { anchor: AnchorAttestation }) {
         <div className="min-w-0">
           <h3 className="truncate font-mono text-sm font-semibold">{anchor.domain}</h3>
           <div className="mt-1 text-sm text-secondary-text">
-            {anchor.seps.length ? anchor.seps.map((n) => `SEP-${n}`).join(" · ") : "no SEP endpoints"}
+            {sepSummary(anchor)}
           </div>
         </div>
         {usable ? (
@@ -41,9 +46,13 @@ export function AnchorCard({ anchor }: { anchor: AnchorAttestation }) {
           <Badge variant="warning">
             <Clock size={12} /> stale
           </Badge>
-        ) : (
+        ) : canJudgeSep31(anchor) ? (
           <Badge variant="default">
             <CircleSlash size={12} /> no SEP-31
+          </Badge>
+        ) : (
+          <Badge variant="default">
+            <CircleHelp size={12} /> SEP-31 unknown
           </Badge>
         )}
       </div>
@@ -110,10 +119,18 @@ export function AnchorCard({ anchor }: { anchor: AnchorAttestation }) {
         </div>
         <div className="flex min-w-0 items-center gap-1">
           <span className="shrink-0">toml sha256</span>
-          <span className="truncate font-mono" title={anchor.tomlHash}>
-            {anchor.tomlHash}
-          </span>
-          <CopyButton value={anchor.tomlHash} label="toml sha256" />
+          {tomlHash ? (
+            <>
+              <span className="truncate font-mono" title={tomlHash}>
+                {tomlHash}
+              </span>
+              <CopyButton value={tomlHash} label="toml sha256" />
+            </>
+          ) : (
+            <span className="font-mono" title="stellar.toml was not fetched, so there is no hash">
+              {NO_TOML_HASH}
+            </span>
+          )}
         </div>
       </div>
     </Card>
