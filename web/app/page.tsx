@@ -7,6 +7,7 @@ import { AnchorCard } from "@/components/AnchorCard";
 import { RegistryFreshness } from "@/components/RegistryFreshness";
 import { corridors, liveness } from "@/lib/corridors";
 import { fetchAttestations, REGISTRY_ID, REGISTRY_NETWORK } from "@/lib/registry";
+import { sortAnchorsForDisplay } from "@/lib/anchor-status";
 
 // Anchor facts are read from the chain at request time, not baked in at build.
 // Revalidate hourly: attestations change on the order of hours, and a page that
@@ -123,7 +124,7 @@ export default async function Home() {
           </div>
         ) : (
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {attestations.anchors.map((a) => (
+            {sortAnchorsForDisplay(attestations.anchors).map((a) => (
               <AnchorCard key={a.domain} anchor={a} />
             ))}
           </div>
