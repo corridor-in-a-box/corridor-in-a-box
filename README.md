@@ -246,6 +246,11 @@ itself, verified by nobody. Both are written by a separate `attest_meta` call,
 under their own storage key and their own cooldown, so an attester already in the
 field keeps working and a sweep can write both halves in one ledger.
 
+The receive list is written once more with the `min_amount` and `max_amount` the
+anchor stated beside each asset (`attest_receive`, read back with `get_receive`),
+so a planner can rule a lane out by amount without calling the anchor. A bound the
+anchor did not state is absent, never zero.
+
 The two lines above read `not recorded` and `no country declared` because that
 record was written before the metadata existed. That is the case the design has
 to survive: a domain with no metadata is `NotFound` on chain and absent in the

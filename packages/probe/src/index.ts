@@ -16,6 +16,7 @@
 
 import { Keypair, TransactionBuilder, type Transaction } from "@stellar/stellar-sdk";
 import { declaredCountry } from "./country";
+import { receiveLimitsFrom, type ReceiveAssetLimits } from "./receive";
 import { tomlHash as tomlHashText } from "./toml-hash";
 import { isSafeUrl } from "./url-safety";
 
@@ -83,6 +84,15 @@ export interface ProbeResult {
   readonly sep31ReceiveAssets?: readonly string[];
   /** Receive assets accepted by the anchor if SEP-31 probe passed. Kept for backwards compatibility. */
   readonly receiveAssets?: readonly string[];
+  /**
+   * OBSERVED: the same receive list with the `min_amount` and `max_amount` the
+   * `/info` response stated for each asset, in the order it listed them.
+   *
+   * Present exactly when `sep31ReceiveAssets` is, since both are read from the
+   * one response. An entry with no `minAmount` or `maxAmount` means no usable
+   * bound was stated for that asset, not a bound of zero or of infinity.
+   */
+  readonly receiveLimits?: readonly ReceiveAssetLimits[];
   /**
    * DECLARED, not verified: the ISO-3166-1 alpha-2 country the anchor gives in
    * its own `stellar.toml` under `[DOCUMENTATION] ORG_PHYSICAL_ADDRESS`.
@@ -287,6 +297,7 @@ export async function probeAnchor(
 
   // --- SEP-31: does it receive anything? ---------------------------------
   let sep31ReceiveAssets: string[] | undefined;
+  let receiveLimits: ReceiveAssetLimits[] | undefined;
   const sep31 = endpoint.get(31);
   if (sep31) {
     try {
@@ -300,6 +311,9 @@ export async function probeAnchor(
         throw new Error("receive list is EMPTY — advertises SEP-31 but accepts nothing");
       }
       sep31ReceiveAssets = assets;
+      // The bounds stated beside each asset, from the same response, so the list
+      // and its limits cannot describe two different moments.
+      receiveLimits = receiveLimitsFrom(j.receive ?? {});
       record("sep31_info", true, `receives ${assets.join(", ")}`);
     } catch (e) {
       record("sep31_info", false, why(e));
@@ -361,6 +375,7 @@ export async function probeAnchor(
     outcomes,
     toml,
     ...(sep31ReceiveAssets ? { sep31ReceiveAssets, receiveAssets: sep31ReceiveAssets } : {}),
+    ...(receiveLimits ? { receiveLimits } : {}),
     ...(country ? { country } : {}),
   };
 }
@@ -374,6 +389,7 @@ export interface FormattedProbeResultJson {
   readonly probesRun: readonly ProbeName[];
   readonly sep31ReceiveAssets?: readonly string[];
   readonly receiveAssets?: readonly string[];
+  readonly receiveLimits?: readonly ReceiveAssetLimits[];
   readonly raw: {
     readonly seps: number;
     readonly probesRun: number;
@@ -417,3 +433,4 @@ export function parseProbeArgs(args: readonly string[]): { domain?: string; json
 
 export * from "./report";
 export * from "./loader";
+export * from "./receive";

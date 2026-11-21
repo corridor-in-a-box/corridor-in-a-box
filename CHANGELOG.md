@@ -83,6 +83,27 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 - `tests/otel.test.ts` uses the SDK's `InMemoryMetricExporter` and asserts counter and
   histogram values after an `execute()` run. Wiring example in `docs/operations.md` §7.
 
+### Added — the registry stores each anchor's SEP-31 receive limits ([#669](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/669))
+
+- The probe records the `min_amount` and `max_amount` a SEP-31 `/info` response states
+  beside each receive asset (`ProbeResult.receiveLimits`), the attester writes them
+  (`attest_receive`, `AnchorAttester.attestReceive`), and the registry stores them under a
+  new key and answers `get_receive(domain)` and `receive_limits(domain, code)`
+  (`AnchorRegistry.getReceive`, `receiveLimits`). A planner can now rule a lane out by amount
+  without calling the anchor.
+- Storage is additive. `DataKey::Receive` is appended and no existing entry changes shape:
+  a stored struct is decoded by its exact set of fields, so a field added to `AnchorMeta`
+  would have made every metadata entry written before it unreadable. Two contract tests hold
+  that in place.
+- Amounts are `Option<i128>` scaled by 10^7 and nothing is rounded. A bound that cannot be
+  written exactly (negative, more than seven decimal places, a float with more digits than
+  it keeps) is left out, and "not recorded" is never read back as zero. A minimum above the
+  maximum is stored as observed.
+- Contracts deployed before this have no such method. `pnpm attest` still writes the bitmaps
+  and the metadata, skips the limits and warns once; `getReceive` returns `null`. Upgrade the
+  registry, then the attester, to start recording. Decision 6 in `docs/registry-metadata.md`
+  has the reasoning.
+
 ### Added — AWS KMS and Google Cloud KMS `ExternalSigner`s ([#277](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/277))
 
 - `AwsKmsSigner` (`ECC_NIST_EDWARDS25519`, `ED25519_SHA_512`, `MessageType: RAW`) and
