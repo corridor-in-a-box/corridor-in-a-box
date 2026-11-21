@@ -95,6 +95,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 - Tested with fake clients that sign with a real local ed25519 key, through
   `assertSignerProducesValidSignatures`.
 
+### Added — the threat model covers the route planner ([#704](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/704))
+
+- `docs/threat-model.md` gains the trust boundary "3.4 Planner ↔ Price Sources, Route Options
+  and Lane Checks": 27 threats across the rate history, route options and lane checks, among
+  them a manipulated price source, a tampered route option and a stale lane check. Each names
+  the code on `main` that already answers it or the issue that will. The attester boundary
+  moves to 3.5, the boundary diagram shows the planner, and the actors table gains a rate
+  source.
+- The section cites code by file and symbol, not by line number, so an edit elsewhere in a
+  file does not strand a reference. `tests/threat-model-planner.test.ts` fails when a cited
+  symbol or file is gone, an issue reference has no link, or a threat is left with neither a
+  mitigation nor an issue.
+
 ### Added — one tag releases every public package ([#263](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/263))
 
 - `.github/workflows/release-packages.yml`: a `vX.Y.Z` tag runs lint, typecheck, tests
