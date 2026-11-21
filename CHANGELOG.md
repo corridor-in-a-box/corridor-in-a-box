@@ -106,6 +106,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   `scripts/changelog-section.ts` extracts the release notes. Both are unit-tested.
 - "Releasing" checklist in `CONTRIBUTING.md`. Cutting the first tag is a maintainer action.
 
+### Added — the wave-11 plan in `ROADMAP.md` ([#708](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/708))
+
+- A new section, "Wave 11 — the smart router and the road to mainnet", in seven workstreams:
+  smart router, rate history, lane checks, onboarding, more anchors and route types, proof on
+  testnet, and mainnet steps. Its 25 items link all 127 open issues of the wave, each one once.
+- Five older open items now name the wave-11 issue that carries them forward. One open item,
+  the SCF grant proposal, has no issue in the tracker and keeps its link to the draft.
+- `tests/roadmap-wave11.test.ts` fails when an open item links neither an issue nor an RFC, an
+  issue of the wave is missing from the plan or listed twice, an issue link is undefined or
+  unused, or a linked file is not in the repository.
+
 ### Added — property tests for the registry contract ([#283](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/283))
 
 - `contracts/registry/src/prop_test.rs` (dev-dependency `proptest`, 48 cases per
