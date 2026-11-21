@@ -64,6 +64,24 @@ export const AnchorSchema = AnchorBaseSchema.extend({ endpoints: AnchorEndpoints
 const Sep31DestSchema = AnchorBaseSchema.extend({
   protocol: z.literal("sep31").default("sep31"),
   endpoints: AnchorEndpointsSchema,
+  third_party_payout: z.unknown().optional(),
+  third_party_payout_note: z.unknown().optional(),
+}).superRefine((val, ctx) => {
+  if (val.third_party_payout !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["third_party_payout"],
+      message: 'dest.third_party_payout is only permitted on protocol "sep6", got "sep31"',
+    });
+  }
+  if (val.third_party_payout_note !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["third_party_payout_note"],
+      message:
+        'dest.third_party_payout_note is only permitted on protocol "sep6", got "sep31"',
+    });
+  }
 });
 
 const Sep6DestSchema = AnchorBaseSchema.extend({
@@ -76,6 +94,18 @@ const Sep6DestSchema = AnchorBaseSchema.extend({
     quote_server: z.string().url().optional(),
     endpoints_verified_at: AnchorEndpointsSchema.shape.endpoints_verified_at,
   }),
+  /**
+   * Whether this SEP-6 receiving anchor permits third-party payouts (#644, RFC 0004 §5).
+   * SEP-6 was originally built for users withdrawing their own funds. Paying a third
+   * party through SEP-6 is only allowed by some anchors and cannot be detected automatically.
+   */
+  third_party_payout: z.boolean().optional(),
+  /**
+   * Note recording who confirmed third-party payout support and when.
+   */
+  third_party_payout_note: z.string().optional(),
+  third_party_payout_confirmed_by: z.string().optional(),
+  third_party_payout_confirmed_at: z.string().optional(),
 });
 
 const CustomDestSchema = AnchorBaseSchema.extend({
@@ -86,16 +116,47 @@ const CustomDestSchema = AnchorBaseSchema.extend({
     extra: z.record(z.string(), z.string()).default({}),
     endpoints_verified_at: AnchorEndpointsSchema.shape.endpoints_verified_at,
   }),
+  third_party_payout: z.unknown().optional(),
+  third_party_payout_note: z.unknown().optional(),
+}).superRefine((val, ctx) => {
+  if (val.third_party_payout !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["third_party_payout"],
+      message: `dest.third_party_payout is only permitted on protocol "sep6", got "${val.protocol}"`,
+    });
+  }
+  if (val.third_party_payout_note !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["third_party_payout_note"],
+      message: `dest.third_party_payout_note is only permitted on protocol "sep6", got "${val.protocol}"`,
+    });
+  }
 });
 
 // A discriminated union discriminates before defaults apply, so default an
 // absent `protocol` to "sep31" first (existing manifests unchanged), the same
 // way SourceAnchorSchema defaults to "prefunded".
 export const DestSchema = z.preprocess(
-  (raw) =>
-    raw && typeof raw === "object" && !Array.isArray(raw) && !("protocol" in raw)
-      ? { ...raw, protocol: "sep31" }
-      : raw,
+  (raw) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+    const obj = raw as Record<string, unknown>;
+    const base = !("protocol" in obj) ? { ...obj, protocol: "sep31" } : obj;
+    if (base.third_party_payout && typeof base.third_party_payout === "object") {
+      const tpp = base.third_party_payout as Record<string, unknown>;
+      return {
+        ...base,
+        third_party_payout: tpp.enabled ?? tpp.allowed ?? true,
+        third_party_payout_note: base.third_party_payout_note ?? tpp.note,
+        third_party_payout_confirmed_by:
+          base.third_party_payout_confirmed_by ?? tpp.confirmed_by,
+        third_party_payout_confirmed_at:
+          base.third_party_payout_confirmed_at ?? tpp.confirmed_at,
+      };
+    }
+    return base;
+  },
   z.discriminatedUnion("protocol", [Sep31DestSchema, Sep6DestSchema]).or(CustomDestSchema),
 );
 
@@ -409,6 +470,14 @@ export const CorridorSchema = z
         message: `compliance.method "sep6_fields" requires dest.protocol "sep6", got "${c.dest.protocol}"`,
       });
     }
+    const dest = c.dest as Record<string, unknown>;
+    if (dest.third_party_payout !== undefined && c.dest.protocol !== "sep6") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["dest", "third_party_payout"],
+        message: `dest.third_party_payout is only permitted on protocol "sep6", got "${c.dest.protocol}"`,
+      });
+    }
   });
 
 function hasKycServer(dest: z.infer<typeof DestSchema>): boolean {
@@ -466,6 +535,12 @@ export function parseCorridor(raw: unknown): ParseCorridorOutcome {
       return fail(
         "MANIFEST_INVALID",
         "dest.protocol: manifest dest specifies base_url with no protocol; set protocol: custom:<name>",
+      );
+    }
+    if ("third_party_payout" in dest) {
+      return fail(
+        "MANIFEST_INVALID",
+        'dest.third_party_payout: third_party_payout is only permitted on protocol "sep6"',
       );
     }
     warnings.push(

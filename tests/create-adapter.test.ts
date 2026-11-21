@@ -144,7 +144,12 @@ describe("create:adapter", () => {
         ],
       }),
     );
-    const tsc = join(nodeModules, ".bin", "tsc");
-    expect(() => execFileSync(tsc, ["-p", tsconfig], { stdio: "pipe" })).not.toThrow();
+    const tsc = join(nodeModules, ".bin", process.platform === "win32" ? "tsc.cmd" : "tsc");
+    expect(() =>
+      execFileSync(tsc, ["-p", tsconfig], {
+        stdio: "pipe",
+        shell: process.platform === "win32",
+      }),
+    ).not.toThrow();
   }, 120_000);
 });
