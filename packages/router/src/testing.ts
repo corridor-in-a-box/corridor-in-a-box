@@ -28,6 +28,7 @@ import { parseCorridor, type Corridor } from "@corridor/manifest";
 import type { AnchorAdapter } from "@corridor/adapter-kit";
 import type { PaymentIntent } from "@corridor/types";
 import type { RouteDecision, RouteResolver } from "./index";
+import { ALL_PRICE_LABELS, type AllowedPriceLabel } from "./label-policy";
 
 /** The corridors and intent the suite hands to `makeResolver` and resolves with. */
 export interface ResolverContractFixtures {
@@ -350,16 +351,12 @@ export function describeResolverContract(
 //   4. every label is one of the three — "locked", "indicative" or "estimated".
 //      A fourth label is a price the sender has no wording for.
 
-/** How firmly an offered option's price is held. */
-export type PlannerPriceLabel = "locked" | "indicative" | "estimated";
-
-const PLANNER_LABELS: readonly PlannerPriceLabel[] = ["locked", "indicative", "estimated"];
-
 /** One route the planner offers, in the position it ranks. */
 export interface PlannedOption {
   /** The receiving anchor's home domain. */
   readonly domain: string;
-  readonly label: PlannerPriceLabel;
+  /** How firmly the price is held: the router's own `AllowedPriceLabel` (RFC 0004 §1). */
+  readonly label: AllowedPriceLabel;
 }
 
 /** One route the planner ruled out, and why. */
@@ -495,7 +492,7 @@ function plannerCasesFor<TInput>(
       run: async () => {
         const { offered } = await run();
         for (const o of offered) {
-          if (!PLANNER_LABELS.includes(o.label)) {
+          if (!ALL_PRICE_LABELS.includes(o.label)) {
             violate(
               `${o.domain} is labelled %s, which the contract does not define ` +
                 `(locked, indicative or estimated)`,

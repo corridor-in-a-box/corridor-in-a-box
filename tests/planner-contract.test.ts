@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { AllowedPriceLabel } from "@corridor/router";
 import {
   checkPlannerContract,
   describePlannerContract,
@@ -13,7 +14,7 @@ import {
 interface Candidate {
   readonly domain: string;
   readonly attested: boolean;
-  readonly label: "locked" | "indicative" | "estimated";
+  readonly label: AllowedPriceLabel;
   readonly receives: number;
 }
 
