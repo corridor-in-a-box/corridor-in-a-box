@@ -5,8 +5,10 @@ import { CorridorCard } from "@/components/CorridorCard";
 import { LivenessLegend } from "@/components/LivenessLegend";
 import { AnchorCard } from "@/components/AnchorCard";
 import { RegistryFreshness } from "@/components/RegistryFreshness";
+import { RateHistoryChart } from "@/components/RateHistoryChart";
 import { corridors, liveness } from "@/lib/corridors";
 import { fetchAttestations, REGISTRY_ID, REGISTRY_NETWORK } from "@/lib/registry";
+import { getDailySummaryData } from "@/lib/rates";
 
 // Anchor facts are read from the chain at request time, not baked in at build.
 // Revalidate hourly: attestations change on the order of hours, and a page that
@@ -16,6 +18,7 @@ export const revalidate = 3600;
 
 export default async function Home() {
   const attestations = await fetchAttestations();
+  const dailySummary = getDailySummaryData();
   const verifiedCount = corridors.filter((c) => {
     const state = liveness(c).state;
     return state === "verified" || state === "proven";
@@ -128,6 +131,11 @@ export default async function Home() {
             ))}
           </div>
         )}
+      </section>
+
+      {/* Rate History per Currency Pair */}
+      <section className="flex flex-col gap-5">
+        <RateHistoryChart initialData={dailySummary.pairs} />
       </section>
 
       {/* Corridors */}

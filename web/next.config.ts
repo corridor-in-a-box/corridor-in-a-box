@@ -45,6 +45,9 @@ const nextConfig: NextConfig = {
     "@corridor/types",
   ],
   poweredByHeader: false,
+  experimental: {
+    turbopackLocalPostcssConfig: true,
+  },
   async headers() {
     return [
       {

@@ -4,6 +4,7 @@ import type { Metadata } from "next";
 import { AlertTriangle, ArrowLeft, ArrowRight, Link2 } from "lucide-react";
 import { AnchorCard } from "@/components/AnchorCard";
 import { LivenessBadge } from "@/components/LivenessBadge";
+import { RateHistoryChart } from "@/components/RateHistoryChart";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import {
@@ -15,6 +16,7 @@ import {
   type EndpointKey,
 } from "@/lib/corridors";
 import { fetchAttestations, REGISTRY_ID, REGISTRY_NETWORK } from "@/lib/registry";
+import { getDailySummaryData } from "@/lib/rates";
 
 // Anchor facts come from the chain, and attestations change on the order of
 // hours. Read them at request time and revalidate hourly — baking a build-time
@@ -57,6 +59,7 @@ export default async function CorridorPage({ params }: { params: Promise<{ id: s
 
   const live = liveness(corridor);
   const attestations = await fetchAttestations();
+  const dailySummary = getDailySummaryData();
   const domain = corridor.dest.endpoints.home_domain;
   const attestation = attestations.anchors.find((a) => a.domain === domain);
 
@@ -253,6 +256,15 @@ export default async function CorridorPage({ params }: { params: Promise<{ id: s
           </div>
         )}
       </section>
+
+      {/* Rate History per Currency Pair */}
+      <section className="flex flex-col gap-4">
+        <SectionHeading title="Rate history & stability" source="daily summary" />
+        <RateHistoryChart
+          initialData={dailySummary.pairs}
+          preselectedPair={`${corridor.source.asset}/${corridor.dest.asset}`}
+        />
+      </section>
     </div>
   );
 }
@@ -262,12 +274,14 @@ function SectionHeading({
   source,
 }: {
   title: string;
-  source: "manifest" | "on-chain registry";
+  source: "manifest" | "on-chain registry" | "daily summary";
 }) {
   return (
     <div className="flex items-center gap-3">
       <h2 className="text-xl font-semibold">{title}</h2>
-      <Badge variant={source === "manifest" ? "default" : "info"}>{source}</Badge>
+      <Badge variant={source === "manifest" ? "default" : "info"}>
+        {source}
+      </Badge>
     </div>
   );
 }
