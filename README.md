@@ -42,6 +42,7 @@ pnpm lint               # eslint + prettier
 pnpm typecheck          # whole monorepo, one tsc pass
 pnpm test               # vitest: engine, manifest, money, sep31, stellar, …
 pnpm example            # run a payment end-to-end (mocked anchor + settle)
+pnpm example:plan-and-pay   # quote three mock anchors, rank them, pay the best one
 pnpm mock:anchor        # scriptable local SEP-1/10/12/31/38 anchor (stall, KYC reject, refund, …): the quickest full corridor
 pnpm cli plan corridors/reference.corridor.yaml   # offline pre-flight / liveness check
 CORRIDOR_SIGNER_SECRET=S… pnpm cli canary corridors/reference.corridor.yaml \
@@ -467,6 +468,16 @@ real](#proof-the-settle-leg-is-real) above (ledger 4024693). `reconcile →
 completed` was proven against the reference anchor on 2026-11-16 (see the update
 in [Proof against a real SEP-31 anchor](#proof-against-a-real-sep-31-anchor)),
 which closes Phase 1. No payment has moved through a third-party anchor yet.
+
+## Fork the send app
+
+The `web/` app is a complete send starter: a sender picks a corridor, sends
+testnet funds and watches the payment arrive, state by state. To copy and
+rebrand it, read [the send-app fork guide](./docs/send-app-fork-guide.md) — it
+covers what to change, how to point the app at a real `@corridor/service`, and
+the two things a fork cannot copy: **your own money-transmission licence and
+your own KMS-backed signing key**. The app is testnet only; real money is your
+licence and your key, not this repo's.
 
 ## License
 
