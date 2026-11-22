@@ -107,3 +107,22 @@ export type {
   BreakerStateReader,
   BreakerStatusRecord,
 } from "./breaker-filter";
+export { ALL_PRICE_LABELS, filterOptionsByAllowedLabels } from "./label-policy";
+  AllowedPriceLabel,
+  LabelledRouteOption,
+  LabelPolicy,
+  LabelPolicyFilterResult,
+  LabelRejectedOption,
+} from "./label-policy";
+
+export { CachedCapabilitiesStore, filterByLimitsAndFields } from "./limits-filter";
+  LimitsDroppedCandidate,
+  LimitsEligibleCandidate,
+  LimitsFilterCandidate,
+  LimitsFilterInput,
+  LimitsFilterOptions,
+  LimitsFilterResult,
+  RouteAssetCapabilities,
+  Sep31InfoCacheOptions,
+  TransactionFieldSpec,
+} from "./limits-filter";
