@@ -14,6 +14,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   same transaction hash. It also checks Horizon for exactly one matching payment transaction.
 - The `reference-crash-resume` workflow runs it daily and on demand, writes the result to the
   job summary and uploads the service and anchor logs on failure.
+### Added — a schema for `contracts/deployments.json` and the testnet upgrade record ([#701](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/701))
+
+- `contracts/deployments.schema.json` describes deployments and upgrades (wasm hash, transaction
+  hash, date and ledger). `public` stays valid with null addresses, and a network that records a
+  contract must also record `deployedAt`.
+- `contracts/deployments.json` records the 2026-11-17 testnet `upgrade()` of the registry and the
+  attester. The hashes were read from the testnet ledger, not estimated.
+- `tests/deployments.test.ts` validates the file and checks that missing or malformed fields fail.
 
 ### Fixed — stale documentation and comments
 
