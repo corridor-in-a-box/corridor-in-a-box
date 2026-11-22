@@ -14,6 +14,40 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   exporter maps the profile onto one receiver's own onboarding form.
   `examples/onboarding/example-receiver-exporter.ts` is a reference exporter, and
   `docs/onboarding-exporters.md` explains how to add one.
+### Added — SEP-10 lane check with the business's own key ([#631](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/631))
+
+- `checkLane(corridor, { signer, fetchImpl?, timeoutMs? })` in `@corridor/router` runs
+  a real SEP-10 challenge/response against the corridor's receiving anchor with the
+  business's own signer and reports `open` (a JWT was issued), `closed` (the anchor
+  answered 401 or 403) or `unknown` (no `web_auth` endpoint, timeout, 5xx, malformed
+  response). A 400 stays `unknown`: it can mean our own malformed challenge, not an
+  onboarding refusal. The check moves no money and returns no JWT — the credential is
+  discarded, never logged or reported.
+- `tests/lane-check.test.ts` drives stub anchors that accept and refuse the signed
+  challenge, plus server-error, unreachable and no-endpoint cases; it also asserts the
+  JWT never reaches the result. Design context in `docs/rfcs/0004-smart-router.md`.
+### Added — error screens for the testnet send app ([#691](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/691))
+
+- `web/components/SendErrorState.tsx` renders a screen for each way a payment cannot go ahead: no routes,
+  every route dropped (listing each route and its reason), the locked price expired, and the payment failed.
+- `web/lib/send-errors.ts` holds the wording. A failed payment is worded from its error code alone, so
+  anchor URLs and upstream response bodies in the raw message are never shown.
+- `tests/web-send-errors.test.ts` covers each state.
+### Added — live crash-resume scenario against the reference anchor ([#677](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/677))
+
+- `pnpm verify:crash-resume` kills the service with `SIGKILL` after the payment has settled on
+  testnet, restarts it on the same Postgres and requires the run to reach `completed` with the
+  same transaction hash. It also checks Horizon for exactly one matching payment transaction.
+- The `reference-crash-resume` workflow runs it daily and on demand, writes the result to the
+  job summary and uploads the service and anchor logs on failure.
+### Added — a schema for `contracts/deployments.json` and the testnet upgrade record ([#701](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/701))
+
+- `contracts/deployments.schema.json` describes deployments and upgrades (wasm hash, transaction
+  hash, date and ledger). `public` stays valid with null addresses, and a network that records a
+  contract must also record `deployedAt`.
+- `contracts/deployments.json` records the 2026-11-17 testnet `upgrade()` of the registry and the
+  attester. The hashes were read from the testnet ledger, not estimated.
+- `tests/deployments.test.ts` validates the file and checks that missing or malformed fields fail.
 
 ### Fixed — stale documentation and comments
 
