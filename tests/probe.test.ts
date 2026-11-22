@@ -24,6 +24,7 @@ import {
   tomlHash as sharedTomlHash,
   tomlValue,
   PROBE_NAMES,
+  PROBE_USER_AGENT,
   type ProbeName,
   type ProbeResult,
 } from "@corridor/probe";
@@ -76,14 +77,30 @@ interface StubOptions {
   sep6TransactionsStatus?: number;
 }
 
+interface RecordedCall {
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+}
+
 function stub(o: StubOptions = {}) {
   const serverKp = Keypair.random();
   const calls: string[] = [];
+  const recordedCalls: RecordedCall[] = [];
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 
   const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
     const u = String(url);
     calls.push(`${init?.method ?? "GET"} ${u}`);
+
+    const headers: Record<string, string> = {
+      ...((init?.headers as Record<string, string> | undefined) ?? {}),
+    };
+    recordedCalls.push({
+      url: u,
+      method: (init?.method ?? "GET").toUpperCase(),
+      headers,
+    });
 
     if (u.includes("stellar.toml")) {
       if (o.toml === null) return new Response("nope", { status: 404 });
@@ -150,7 +167,7 @@ function stub(o: StubOptions = {}) {
     return json({}, 404);
   }) as unknown as typeof fetch;
 
-  return { fetchImpl, calls };
+  return { fetchImpl, calls, recordedCalls };
 }
 
 const passed = (r: { probesPassed: number }, p: ProbeName) =>
@@ -567,5 +584,69 @@ describe("formatProbeResultJson & parseProbeArgs (#232)", () => {
         probesPassed: fixture.probesPassed,
       });
     });
+  });
+});
+
+describe("probeAnchor User-Agent (#663)", () => {
+  it("exports PROBE_USER_AGENT constant with descriptive identifier", () => {
+    expect(PROBE_USER_AGENT).toBe(
+      "corridor-in-a-box-probe (+https://github.com/corridor-in-a-box/corridor-in-a-box)",
+    );
+  });
+
+  it("sends PROBE_USER_AGENT on every HTTP request across all SEPs", async () => {
+    const { fetchImpl, recordedCalls } = stub();
+    const r = await probeAnchor("a.example", { fetchImpl });
+
+    expect(decodeProbes(r.probesPassed).length).toBe(7);
+    expect(recordedCalls.length).toBeGreaterThanOrEqual(7);
+
+    for (const call of recordedCalls) {
+      expect(call.headers["user-agent"]).toBe(PROBE_USER_AGENT);
+    }
+  });
+
+  it("sends PROBE_USER_AGENT on initial stellar.toml fetch even when it fails", async () => {
+    const { fetchImpl, recordedCalls } = stub({ toml: null });
+    await probeAnchor("a.example", { fetchImpl });
+
+    expect(recordedCalls.length).toBe(1);
+    expect(recordedCalls[0].url).toBe("https://a.example/.well-known/stellar.toml");
+    expect(recordedCalls[0].headers["user-agent"]).toBe(PROBE_USER_AGENT);
+  });
+
+  it("preserves other request headers alongside user-agent", async () => {
+    const { fetchImpl, recordedCalls } = stub();
+    await probeAnchor("a.example", { fetchImpl });
+
+    // POST /auth has content-type
+    const authPost = recordedCalls.find((c) => c.url.includes("/auth") && c.method === "POST");
+    expect(authPost).toBeDefined();
+    expect(authPost?.headers["user-agent"]).toBe(PROBE_USER_AGENT);
+    expect(authPost?.headers["content-type"]).toBe("application/json");
+
+    // GET /sep31/info has authorization
+    const sep31Get = recordedCalls.find((c) => c.url.includes("/sep31/info"));
+    expect(sep31Get).toBeDefined();
+    expect(sep31Get?.headers["user-agent"]).toBe(PROBE_USER_AGENT);
+    expect(sep31Get?.headers["authorization"]).toMatch(/^Bearer /);
+
+    // POST /sep38/quote has both content-type and authorization
+    const quotePost = recordedCalls.find((c) => c.url.includes("/sep38/quote"));
+    expect(quotePost).toBeDefined();
+    expect(quotePost?.headers["user-agent"]).toBe(PROBE_USER_AGENT);
+    expect(quotePost?.headers["content-type"]).toBe("application/json");
+    expect(quotePost?.headers["authorization"]).toMatch(/^Bearer /);
+  });
+
+  it("allows overriding user-agent via ProbeOptions.userAgent", async () => {
+    const customUa = "custom-probe/1.0 (+https://example.com)";
+    const { fetchImpl, recordedCalls } = stub();
+    await probeAnchor("a.example", { fetchImpl, userAgent: customUa });
+
+    expect(recordedCalls.length).toBeGreaterThanOrEqual(7);
+    for (const call of recordedCalls) {
+      expect(call.headers["user-agent"]).toBe(customUa);
+    }
   });
 });

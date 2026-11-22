@@ -17,6 +17,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 - `tests/planner-contract.test.ts` runs the suite over a stub planner and asserts it fails a planner
   that breaks each rule.
 
+### Added — a custody statement ([#707](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/707))
+
+- `docs/custody.md` says in one place that the project never holds funds or a key that can
+  move them: who holds the money at each step of a payment, the one key on the money path and
+  who holds it, what the project does and does not do, and the keys it does hold (attester,
+  registry admin, testnet CI seeds), none of which can move money. Linked from the README.
+
+### Added — onboarding exporter framework ([#639](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/639))
+
+- `@corridor/adapter-kit` exports a minimal `BusinessProfile`, the `OnboardingExporter`
+  interface and `createExporterRegistry()`, which rejects malformed and duplicate ids. An
+  exporter maps the profile onto one receiver's own onboarding form.
+  `examples/onboarding/example-receiver-exporter.ts` is a reference exporter, and
+  `docs/onboarding-exporters.md` explains how to add one.
+
 ### Added — SEP-10 lane check with the business's own key ([#631](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/631))
 
 - `checkLane(corridor, { signer, fetchImpl?, timeoutMs? })` in `@corridor/router` runs
@@ -55,6 +70,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   attester. The hashes were read from the testnet ledger, not estimated.
 - `tests/deployments.test.ts` validates the file and checks that missing or malformed fields fail.
 
+### Changed — `testanchor-sep6` records its blocked payout attempt ([#649](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/649))
+
+- `corridors/testanchor-sep6.corridor.yaml` now records the 2026-11-22 payout attempt: a funded
+  testnet account passed SEP-10 and SEP-12 and opened SEP-6 withdrawal
+  `19a2872f-278c-4867-9931-7e7f82ee67a6`, but it stayed `incomplete` with no
+  `withdraw_anchor_account`, so no Stellar payment could be sent.
+- `/sep6/withdraw-exchange` rejects USDC with HTTP 400 and the transaction's `more_info_url`
+  is the SEP-24 reference UI, whose business-server calls return 401 for the SEP-6 token.
+  No `proof:` block was added, because no payout completed.
+
 ### Fixed — stale documentation and comments
 
 - Docs said no transition enters `refund_pending` and that `refunded` is reachable only when
@@ -73,6 +98,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   points at the closed #196 as pending: it says there is no indicative-price path, which is
   what the firm-quote-only adapter actually does. The `sep6` no-quote-server message changed
   accordingly.
+
+### Added — a pilot readiness checklist ([#703](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/703))
+
+- `docs/pilot-readiness.md` is the list a licensed sending partner works through before a
+  first real payment and while a pilot runs: who is responsible for what (the partner holds
+  the licence, the key and the funds), then keys, limits, safety gates, monitoring, refunds
+  and a rehearsal, each item taken from the runbook, the key-management guide or the threat
+  model, with a table mapping it back to the threat model. It records that `corridor canary`
+  signs with a raw seed and has no KMS option, and how to canary without taking the
+  distribution account's key out of the vault. Linked from the runbook.
 
 ### Added — every library package builds to `dist/` with type declarations ([#262](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/262))
 
@@ -105,6 +140,25 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   for `engine/src/{run,verbs,state,idempotency}.ts` and `types/src/money.ts`; CI's `build`
   job runs it and uploads `coverage/lcov.info`. The numbers are in `CONTRIBUTING.md`.
 
+### Added — a testnet / mainnet switch on the dashboard ([#700](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/700))
+
+- The dashboard's attested anchors sit behind a Testnet / Mainnet switch. Each network is
+  read from its own registry over its own RPC (`fetchAttestations(network)`), and
+  `?network=public` links straight to the mainnet view. `STELLAR_NETWORK` chooses which
+  network opens first; `mainnet` is accepted for `public`, and a value that names neither
+  network now means testnet instead of an error.
+- Every `AnchorCard` and `CorridorCard` carries a badge naming its network, and an anchor
+  card's ledger and attester links go to that network's explorer. The corridor page still
+  reads the `STELLAR_NETWORK` registry only, and now says which one that is.
+- A network with no registry in `contracts/deployments.json`, which is mainnet today, shows
+  "No registry on Mainnet yet" and makes no RPC call. That is kept apart from a registry that
+  could not be read and from one that is empty. Once `public.registry` is set the mainnet
+  view fills in with no code change.
+- `tests/web-network.test.ts` covers the parsing, the URL and the empty state;
+  `tests/web-registry-source.test.ts` gives both networks a fake registry and checks that
+  each read goes to its own RPC and contract, and that one network being down does not blank
+  the other.
+
 ### Added — attester, full hash and explorer links on `AnchorCard` ([#290](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/290))
 
 - The web card links the attested ledger and the attester to stellar.expert for the
@@ -121,6 +175,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   provenance and an SBOM, after the same smoke test. Actions pinned by SHA.
 - Not yet run on a Docker daemon by the author; the CI `docker` job is the first build.
 
+### Added — five Asia-Pacific anchors in the fleet ([#666](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/666))
+
+- `contracts/anchors.json` gains `audd.digital` (Novatti's AUDD, Australia),
+  `cebuanalhuillier.com` (Cebuana, Philippines), `perahub.com.ph` (PeraHub, Philippines),
+  `ripplefox.com` (RippleFox, a CNY issuer) and `fchain.io` (FChain's Firefly). The first
+  three come from the Stellar Anchor Directory and the last two from the `stellar.toml` on
+  their own sites. The file's `$comment` records the source and the 2026-11-20 probe result
+  for each.
+- What the probe found: `fchain.io` passes `toml_fetch` and `sep6_info`; `audd.digital` and
+  `ripplefox.com` publish a toml with no SEP endpoint; `cebuanalhuillier.com` (HTTP 404) and
+  `perahub.com.ph` (its certificate does not validate) publish none, so the SEP-31 the
+  directory lists for them is unverified. No corridor manifest is added.
+- `docs/mainnet-registry.md` restates the fee budget for a 24-anchor fleet.
+
 ### Added — `@corridor/otel`, OpenTelemetry adapters for `Metrics` and `Logger` ([#273](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/273))
 
 - New package `@corridor/otel`: `otelMetrics(meter)` (counter per name for `increment`,
@@ -130,6 +198,27 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   nothing from OpenTelemetry.
 - `tests/otel.test.ts` uses the SDK's `InMemoryMetricExporter` and asserts counter and
   histogram values after an `execute()` run. Wiring example in `docs/operations.md` §7.
+
+### Added — the registry stores each anchor's SEP-31 receive limits ([#669](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/669))
+
+- The probe records the `min_amount` and `max_amount` a SEP-31 `/info` response states
+  beside each receive asset (`ProbeResult.receiveLimits`), the attester writes them
+  (`attest_receive`, `AnchorAttester.attestReceive`), and the registry stores them under a
+  new key and answers `get_receive(domain)` and `receive_limits(domain, code)`
+  (`AnchorRegistry.getReceive`, `receiveLimits`). A planner can now rule a lane out by amount
+  without calling the anchor.
+- Storage is additive. `DataKey::Receive` is appended and no existing entry changes shape:
+  a stored struct is decoded by its exact set of fields, so a field added to `AnchorMeta`
+  would have made every metadata entry written before it unreadable. Two contract tests hold
+  that in place.
+- Amounts are `Option<i128>` scaled by 10^7 and nothing is rounded. A bound that cannot be
+  written exactly (negative, more than seven decimal places, a float with more digits than
+  it keeps) is left out, and "not recorded" is never read back as zero. A minimum above the
+  maximum is stored as observed.
+- Contracts deployed before this have no such method. `pnpm attest` still writes the bitmaps
+  and the metadata, skips the limits and warns once; `getReceive` returns `null`. Upgrade the
+  registry, then the attester, to start recording. Decision 6 in `docs/registry-metadata.md`
+  has the reasoning.
 
 ### Added — AWS KMS and Google Cloud KMS `ExternalSigner`s ([#277](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/277))
 
@@ -142,6 +231,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   `docs/key-management.md`.
 - Tested with fake clients that sign with a real local ed25519 key, through
   `assertSignerProducesValidSignatures`.
+
+### Added — the threat model covers the route planner ([#704](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/704))
+
+- `docs/threat-model.md` gains the trust boundary "3.4 Planner ↔ Price Sources, Route Options
+  and Lane Checks": 27 threats across the rate history, route options and lane checks, among
+  them a manipulated price source, a tampered route option and a stale lane check. Each names
+  the code on `main` that already answers it or the issue that will. The attester boundary
+  moves to 3.5, the boundary diagram shows the planner, and the actors table gains a rate
+  source.
+- The section cites code by file and symbol, not by line number, so an edit elsewhere in a
+  file does not strand a reference. `tests/threat-model-planner.test.ts` fails when a cited
+  symbol or file is gone, an issue reference has no link, or a threat is left with neither a
+  mitigation nor an issue.
 
 ### Added — one tag releases every public package ([#263](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/263))
 

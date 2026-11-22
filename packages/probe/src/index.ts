@@ -16,6 +16,7 @@
 
 import { Keypair, TransactionBuilder, type Transaction } from "@stellar/stellar-sdk";
 import { declaredCountry } from "./country";
+import { receiveLimitsFrom, type ReceiveAssetLimits } from "./receive";
 import { tomlHash as tomlHashText } from "./toml-hash";
 import { isSafeUrl } from "./url-safety";
 
@@ -46,6 +47,13 @@ export const PROBE_NAMES = [
   "sep6_info",
   "sep6_auth",
 ] as const;
+
+/**
+ * Descriptive User-Agent identifying the probe and linking to this repository,
+ * sent on every outbound HTTP request.
+ */
+export const PROBE_USER_AGENT =
+  "corridor-in-a-box-probe (+https://github.com/corridor-in-a-box/corridor-in-a-box)";
 
 export type SepNumber = (typeof SEP_NUMBERS)[number];
 export type ProbeName = (typeof PROBE_NAMES)[number];
@@ -84,6 +92,15 @@ export interface ProbeResult {
   /** Receive assets accepted by the anchor if SEP-31 probe passed. Kept for backwards compatibility. */
   readonly receiveAssets?: readonly string[];
   /**
+   * OBSERVED: the same receive list with the `min_amount` and `max_amount` the
+   * `/info` response stated for each asset, in the order it listed them.
+   *
+   * Present exactly when `sep31ReceiveAssets` is, since both are read from the
+   * one response. An entry with no `minAmount` or `maxAmount` means no usable
+   * bound was stated for that asset, not a bound of zero or of infinity.
+   */
+  readonly receiveLimits?: readonly ReceiveAssetLimits[];
+  /**
    * DECLARED, not verified: the ISO-3166-1 alpha-2 country the anchor gives in
    * its own `stellar.toml` under `[DOCUMENTATION] ORG_PHYSICAL_ADDRESS`.
    *
@@ -104,6 +121,8 @@ export interface ProbeOptions {
    *  endpoint performs the handshake correctly. */
   keypair?: Keypair;
   now?: () => number;
+  /** Custom User-Agent header string. Defaults to PROBE_USER_AGENT. */
+  userAgent?: string;
 }
 
 const ZERO_HASH = "0".repeat(64);
@@ -144,6 +163,7 @@ export async function probeAnchor(
   const doFetch = opts.fetchImpl ?? fetch;
   const timeoutMs = opts.timeoutMs ?? 15_000;
   const now = opts.now ?? (() => Date.now());
+  const userAgent = opts.userAgent ?? PROBE_USER_AGENT;
   const outcomes: ProbeOutcome[] = [];
 
   let seps = 0;
@@ -154,11 +174,18 @@ export async function probeAnchor(
   // Single choke point: every endpoint fetched past the initial SEP-1 request
   // is a URL the anchor's own stellar.toml supplied. Refuse anything that
   // isn't a public https:// host before it's dereferenced — see url-safety.ts.
-  const get = (url: string, init?: RequestInit) => {
+  const get = (
+    url: string,
+    init?: Omit<RequestInit, "headers"> & { headers?: Record<string, string> },
+  ) => {
     if (!isSafeUrl(url)) {
       return Promise.reject(new Error(`refusing to fetch unsafe url: ${url}`));
     }
-    return doFetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+    const headers: Record<string, string> = {
+      "user-agent": userAgent,
+      ...init?.headers,
+    };
+    return doFetch(url, { ...init, headers, signal: AbortSignal.timeout(timeoutMs) });
   };
 
   const record = (probe: ProbeName, passed: boolean, detail: string) => {
@@ -287,6 +314,7 @@ export async function probeAnchor(
 
   // --- SEP-31: does it receive anything? ---------------------------------
   let sep31ReceiveAssets: string[] | undefined;
+  let receiveLimits: ReceiveAssetLimits[] | undefined;
   const sep31 = endpoint.get(31);
   if (sep31) {
     try {
@@ -300,6 +328,9 @@ export async function probeAnchor(
         throw new Error("receive list is EMPTY — advertises SEP-31 but accepts nothing");
       }
       sep31ReceiveAssets = assets;
+      // The bounds stated beside each asset, from the same response, so the list
+      // and its limits cannot describe two different moments.
+      receiveLimits = receiveLimitsFrom(j.receive ?? {});
       record("sep31_info", true, `receives ${assets.join(", ")}`);
     } catch (e) {
       record("sep31_info", false, why(e));
@@ -361,6 +392,7 @@ export async function probeAnchor(
     outcomes,
     toml,
     ...(sep31ReceiveAssets ? { sep31ReceiveAssets, receiveAssets: sep31ReceiveAssets } : {}),
+    ...(receiveLimits ? { receiveLimits } : {}),
     ...(country ? { country } : {}),
   };
 }
@@ -374,6 +406,7 @@ export interface FormattedProbeResultJson {
   readonly probesRun: readonly ProbeName[];
   readonly sep31ReceiveAssets?: readonly string[];
   readonly receiveAssets?: readonly string[];
+  readonly receiveLimits?: readonly ReceiveAssetLimits[];
   readonly raw: {
     readonly seps: number;
     readonly probesRun: number;
@@ -417,3 +450,4 @@ export function parseProbeArgs(args: readonly string[]): { domain?: string; json
 
 export * from "./report";
 export * from "./loader";
+export * from "./receive";

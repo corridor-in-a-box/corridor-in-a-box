@@ -11,6 +11,10 @@ running migrations, and the project's versioning/release policy.
 > Treat this runbook as the plan for a self-run testnet/close-beta pilot, not a
 > claim of production-readiness.
 
+A licensed partner preparing a pilot with real money should work through
+[pilot-readiness.md](./pilot-readiness.md), which puts this runbook, the key-management guide
+and the threat model into one checklist.
+
 ## 0. Adding an anchor to the fleet
 
 `contracts/anchors.json` is the fleet's curated list of anchors. It is **not**
