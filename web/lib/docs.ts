@@ -207,6 +207,7 @@ Body is a \`PaymentIntent\`:
 
 ## Other endpoints
 
+- \`POST /routes\` — plan and rank route options for a payment before paying.
 - \`GET /payments/:key\` — current run state (scoped to authenticated tenant).
 - \`GET /healthz\` — liveness (public, unmetered).
 - \`GET /readyz\` — readiness: 200 when every check passes, 503 while draining or when one fails (public, unmetered).

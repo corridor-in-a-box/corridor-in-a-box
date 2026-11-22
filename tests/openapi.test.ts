@@ -199,6 +199,7 @@ describe("openapi.yaml: the document", () => {
         "/payments",
         "/payments/{key}",
         "/readyz",
+        "/routes",
       ].sort(),
     );
   });
@@ -349,5 +350,89 @@ describe("openapi.yaml: route() responses match the spec", () => {
     });
     expect(unsigned.status).toBe(401);
     check(unsigned, "/callbacks/sep31/{corridorId}", "post");
+  });
+
+  it("POST /routes: 200 with ranked RouteOptions", async () => {
+    const s = svc();
+    const res = await s.route({
+      method: "POST",
+      path: "/routes",
+      body: { sourceAmount: { asset: "USDC", amount: "100.00" } },
+    });
+    expect(res.status).toBe(200);
+    check(res, "/routes", "post");
+  });
+
+  it("POST /routes: 400 for an invalid body", async () => {
+    const s = svc();
+    const res = await s.route({
+      method: "POST",
+      path: "/routes",
+      body: { sourceAmount: { asset: "USDC", amount: "" } },
+    });
+    expect(res.status).toBe(400);
+    check(res, "/routes", "post");
+  });
+
+  it("POST /routes: 404 for an unknown corridor", async () => {
+    const s = svc();
+    const res = await s.route({
+      method: "POST",
+      path: "/routes",
+      body: { corridorId: "nope", sourceAmount: { asset: "USDC", amount: "100.00" } },
+    });
+    expect(res.status).toBe(404);
+    check(res, "/routes", "post");
+  });
+
+  it("POST /routes: 422 for an invalid amount or asset", async () => {
+    const s = svc();
+    const amount = await s.route({
+      method: "POST",
+      path: "/routes",
+      body: { sourceAmount: { asset: "USDC", amount: "-5" } },
+    });
+    expect(amount.status).toBe(422);
+    check(amount, "/routes", "post");
+
+    const asset = await s.route({
+      method: "POST",
+      path: "/routes",
+      body: { corridorId: "test", sourceAmount: { asset: "EURC", amount: "5" } },
+    });
+    expect(asset.status).toBe(422);
+    check(asset, "/routes", "post");
+  });
+
+  it("POST /routes: 401 without a known key, 429 when the bucket is empty", async () => {
+    const keyed = svc({}, { apiKeys: new Set(["k-secret"]) });
+    const denied = await keyed.route({
+      method: "POST",
+      path: "/routes",
+      body: { sourceAmount: { asset: "USDC", amount: "100.00" } },
+    });
+    expect(denied.status).toBe(401);
+    check(denied, "/routes", "post");
+
+    const limited = svc({}, { rateLimiter: { take: () => false } });
+    const res = await limited.route({
+      method: "POST",
+      path: "/routes",
+      body: { sourceAmount: { asset: "USDC", amount: "100.00" } },
+    });
+    expect(res.status).toBe(429);
+    check(res, "/routes", "post");
+  });
+
+  it("POST /routes: 503 while draining", async () => {
+    const s = svc();
+    await s.drain();
+    const res = await s.route({
+      method: "POST",
+      path: "/routes",
+      body: { sourceAmount: { asset: "USDC", amount: "100.00" } },
+    });
+    expect(res.status).toBe(503);
+    check(res, "/routes", "post");
   });
 });

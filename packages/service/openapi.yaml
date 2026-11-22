@@ -137,6 +137,59 @@ paths:
                   - { $ref: "#/components/schemas/Draining" }
                   - { $ref: "#/components/schemas/EngineError" }
         "504": { $ref: "#/components/responses/EngineError" }
+  /routes:
+    post:
+      tags: [payments]
+      operationId: planRoutes
+      summary: Plan and rank routes
+      description: |
+        Plans and returns ranked route options for a payment before paying. Candidates are
+        filtered against available corridor manifests and on-chain registry evidence, and
+        ordered by proof tier, trust, freshness, and health score.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RouteRequest" }
+      responses:
+        "200":
+          description: Ranked route options for the requested payment.
+          headers:
+            x-request-id: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RouteOptions" }
+        "400":
+          description: The body is not a valid route request. `field` names the offending input.
+          headers:
+            x-request-id: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InvalidBody" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: The requested corridor id is not served by this process.
+          headers:
+            x-request-id: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+        "422":
+          description: Invalid amount or asset.
+          headers:
+            x-request-id: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AmountInvalid" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "503":
+          description: Draining.
+          headers:
+            x-request-id: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Draining" }
   /payments/{key}:
     get:
       tags: [payments]
@@ -418,9 +471,64 @@ components:
       required: [error, field, reason]
       additionalProperties: false
       properties:
-        error: { const: invalid payment body }
+        error: { enum: [invalid payment body, invalid route request] }
         field: { type: string, description: 'Path of the offending input, e.g. "sender.id".' }
         reason: { type: string }
+    RouteRequest:
+      type: object
+      required: [sourceAmount]
+      additionalProperties: false
+      properties:
+        sourceAmount: { $ref: "#/components/schemas/Money" }
+        destAsset: { type: string, minLength: 1 }
+        destJurisdiction: { type: string, minLength: 1 }
+        corridorId: { type: string, minLength: 1, maxLength: 128 }
+        sender: { $ref: "#/components/schemas/Party" }
+        recipient: { $ref: "#/components/schemas/Party" }
+        destinationFields:
+          type: object
+          maxProperties: 50
+          additionalProperties: { type: string, maxLength: 256 }
+    RouteOption:
+      type: object
+      required:
+        - rank
+        - corridorId
+        - label
+        - runnable
+        - trust
+        - protocol
+        - sourceAmount
+        - destinationDomain
+        - destAsset
+      additionalProperties: false
+      properties:
+        rank: { type: integer, minimum: 1 }
+        corridorId: { type: string }
+        label: { enum: [proven, verified, unverified] }
+        runnable: { type: boolean }
+        trust: { enum: [attested, manifest] }
+        protocol: { type: string }
+        sourceAmount: { $ref: "#/components/schemas/Money" }
+        destinationDomain: { type: string }
+        destAsset: { type: string }
+        destJurisdiction: { type: string }
+        estimatedDestAmount: { type: string }
+        limits:
+          type: object
+          additionalProperties: false
+          properties:
+            min: { type: string }
+            max: { type: string }
+            canaryMax: { type: string }
+    RouteOptions:
+      type: object
+      required: [routes]
+      additionalProperties: false
+      properties:
+        routes:
+          type: array
+          items: { $ref: "#/components/schemas/RouteOption" }
     Draining:
       type: object
       required: [error]

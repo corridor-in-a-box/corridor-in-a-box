@@ -7,12 +7,18 @@ import { createMockAdapter } from "@corridor/adapter-kit";
 import { StaticRouteResolver, UnattestedAnchorError } from "@corridor/router";
 import {
   InMemoryAuditLog,
+  InMemoryCorridorHealthStore,
   InMemoryIdempotencyStore,
   createMockSubmitter,
   type EngineDeps,
   type Logger,
 } from "@corridor/engine";
-import { createService, gracefulShutdown, type ServiceOptions } from "@corridor/service";
+import {
+  createService,
+  gracefulShutdown,
+  type RouteOption,
+  type ServiceOptions,
+} from "@corridor/service";
 import type { CorridorErrorCode, PaymentIntent } from "@corridor/types";
 
 function corridor(): Corridor {
@@ -967,5 +973,261 @@ describe("service: X-Request-Id propagation", () => {
     } finally {
       await gracefulShutdown(srv, s, { graceMs: 200 });
     }
+  });
+});
+
+describe("service: POST /routes", () => {
+  function multiCorridors(): Map<string, Corridor> {
+    const provenCorridor = corridor();
+    const verifiedCorridor = parseCorridor({
+      id: "verified-lane",
+      source: { name: "S", asset: "USDC", endpoints: { home_domain: "s.example" } },
+      dest: {
+        name: "D2",
+        asset: "iso4217:ARS",
+        endpoints: {
+          home_domain: "d2.example",
+          transfer_server_sep31: "https://d2.example/sep31",
+          endpoints_verified_at: "1970-01-02",
+        },
+      },
+      fx: { path: ["ARS", "USDC", "ARS"], who_holds_risk: "receiving_anchor" },
+      compliance: { source_jurisdiction: "AR", dest_jurisdiction: "AR" },
+      settlement: { network: "public", asset_issuer: "GISSUER" },
+      recovery: {},
+    });
+    if (!verifiedCorridor.ok) throw new Error("verifiedCorridor invalid");
+
+    const unverifiedCorridor = parseCorridor({
+      id: "unverified-lane",
+      source: { name: "S", asset: "USDC", endpoints: { home_domain: "s.example" } },
+      dest: {
+        name: "D3",
+        asset: "iso4217:ARS",
+        endpoints: {
+          home_domain: "d3.example",
+          transfer_server_sep31: "https://d3.example/sep31",
+        },
+      },
+      fx: { path: ["ARS", "USDC", "ARS"], who_holds_risk: "receiving_anchor" },
+      compliance: { source_jurisdiction: "AR", dest_jurisdiction: "AR" },
+      settlement: { network: "public", asset_issuer: "GISSUER" },
+      recovery: {},
+    });
+    if (!unverifiedCorridor.ok) throw new Error("unverifiedCorridor invalid");
+
+    return new Map([
+      ["test", provenCorridor],
+      ["verified-lane", verifiedCorridor.value],
+      ["unverified-lane", unverifiedCorridor.value],
+    ]);
+  }
+
+  it("rejects POST /routes without a valid API key (401)", async () => {
+    const s = svc({ apiKeys: new Set(["secret"]) });
+    const noKey = await s.route({
+      method: "POST",
+      path: "/routes",
+      body: { sourceAmount: { asset: "USDC", amount: "100.00" } },
+    });
+    expect(noKey.status).toBe(401);
+    expect(noKey.body).toEqual({ error: "unauthorized" });
+  });
+
+  it("accepts POST /routes with a valid API key (200)", async () => {
+    const s = svc({ apiKeys: new Set(["secret"]) });
+    const good = await s.route({
+      method: "POST",
+      path: "/routes",
+      body: { sourceAmount: { asset: "USDC", amount: "100.00" } },
+      headers: { authorization: "Bearer secret" },
+    });
+    expect(good.status).toBe(200);
+  });
+
+  it("rate-limits POST /routes when bucket is empty (429)", async () => {
+    const s = svc({ rateLimiter: { take: () => false } });
+    const limited = await s.route({
+      method: "POST",
+      path: "/routes",
+      body: { sourceAmount: { asset: "USDC", amount: "100.00" } },
+    });
+    expect(limited.status).toBe(429);
+    expect(limited.body).toEqual({ error: "rate_limited" });
+  });
+
+  it("returns 503 while draining", async () => {
+    const s = svc();
+    await s.drain();
+    const res = await s.route({
+      method: "POST",
+      path: "/routes",
+      body: { sourceAmount: { asset: "USDC", amount: "100.00" } },
+    });
+    expect(res.status).toBe(503);
+    expect(res.body).toEqual({ error: "draining" });
+  });
+
+  it("rejects non-object body with 400", async () => {
+    const s = svc();
+    const res = await s.route({ method: "POST", path: "/routes", body: "not an object" });
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({
+      error: "invalid route request",
+      field: "<body>",
+      reason: "expected a JSON object",
+    });
+  });
+
+  it("rejects unknown top-level field with 400", async () => {
+    const s = svc();
+    const res = await s.route({
+      method: "POST",
+      path: "/routes",
+      body: { sourceAmount: { asset: "USDC", amount: "100.00" }, bogusField: 123 },
+    });
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({
+      error: "invalid route request",
+      field: "bogusField",
+      reason: "unknown field",
+    });
+  });
+
+  it("rejects missing or invalid sourceAmount with 400", async () => {
+    const s = svc();
+    const missing = await s.route({ method: "POST", path: "/routes", body: {} });
+    expect(missing.status).toBe(400);
+    expect((missing.body as { field?: string }).field).toBe("sourceAmount");
+
+    const emptyAsset = await s.route({
+      method: "POST",
+      path: "/routes",
+      body: { sourceAmount: { asset: "", amount: "10.00" } },
+    });
+    expect(emptyAsset.status).toBe(400);
+    expect((emptyAsset.body as { field?: string }).field).toBe("sourceAmount.asset");
+
+    const emptyAmount = await s.route({
+      method: "POST",
+      path: "/routes",
+      body: { sourceAmount: { asset: "USDC", amount: "" } },
+    });
+    expect(emptyAmount.status).toBe(400);
+    expect((emptyAmount.body as { field?: string }).field).toBe("sourceAmount.amount");
+  });
+
+  it("rejects non-settleable / negative amount with 422", async () => {
+    const s = svc();
+    const res = await s.route({
+      method: "POST",
+      path: "/routes",
+      body: { sourceAmount: { asset: "USDC", amount: "-50.00" } },
+    });
+    expect(res.status).toBe(422);
+    expect(res.body).toEqual({
+      error: "AMOUNT_INVALID",
+      field: "sourceAmount.amount",
+      message: "amount must be a positive decimal",
+    });
+  });
+
+  it("rejects unknown corridorId with 404", async () => {
+    const s = svc();
+    const res = await s.route({
+      method: "POST",
+      path: "/routes",
+      body: { corridorId: "does-not-exist", sourceAmount: { asset: "USDC", amount: "10.00" } },
+    });
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({
+      error: "unknown corridor",
+      corridorId: "does-not-exist",
+    });
+  });
+
+  it("rejects asset not matching specified corridor with 422", async () => {
+    const s = svc();
+    const res = await s.route({
+      method: "POST",
+      path: "/routes",
+      body: { corridorId: "test", sourceAmount: { asset: "EURC", amount: "10.00" } },
+    });
+    expect(res.status).toBe(422);
+    expect(res.body).toEqual({
+      error: "AMOUNT_INVALID",
+      field: "sourceAmount.asset",
+      message: "asset does not match the corridor's source or bridge asset",
+    });
+  });
+
+  it("successfully plans and ranks routes across corridors", async () => {
+    const corridors = multiCorridors();
+    const s = svc({ corridors });
+    const res = await s.route({
+      method: "POST",
+      path: "/routes",
+      body: { sourceAmount: { asset: "USDC", amount: "100.00" }, destAsset: "iso4217:ARS" },
+    });
+    expect(res.status).toBe(200);
+    const body = res.body as { routes: RouteOption[] };
+    expect(body.routes).toBeDefined();
+    expect(body.routes.length).toBe(3);
+
+    expect(body.routes[0].rank).toBe(1);
+    expect(body.routes[0].corridorId).toBe("test");
+    expect(body.routes[0].label).toBe("proven");
+    expect(body.routes[0].runnable).toBe(true);
+    expect(body.routes[0].trust).toBe("manifest");
+    expect(body.routes[0].sourceAmount).toEqual({ asset: "USDC", amount: "100.00" });
+    expect(body.routes[0].destinationDomain).toBe("d.example");
+    expect(body.routes[0].destAsset).toBe("iso4217:ARS");
+
+    expect(body.routes[1].rank).toBe(2);
+    expect(body.routes[1].corridorId).toBe("verified-lane");
+    expect(body.routes[1].label).toBe("verified");
+    expect(body.routes[1].runnable).toBe(true);
+
+    expect(body.routes[2].rank).toBe(3);
+    expect(body.routes[2].corridorId).toBe("unverified-lane");
+    expect(body.routes[2].label).toBe("unverified");
+    expect(body.routes[2].runnable).toBe(false);
+  });
+
+  it("filters routes by destJurisdiction and returns empty when no corridors match", async () => {
+    const s = svc({ corridors: multiCorridors() });
+    const res = await s.route({
+      method: "POST",
+      path: "/routes",
+      body: {
+        sourceAmount: { asset: "USDC", amount: "100.00" },
+        destJurisdiction: "NONEXISTENT",
+      },
+    });
+    expect(res.status).toBe(200);
+    expect((res.body as { routes?: RouteOption[] }).routes).toEqual([]);
+  });
+
+  it("excludes corridors halted by circuit breaker", async () => {
+    const health = new InMemoryCorridorHealthStore();
+    await health.recordOutcome("test", "failure", Date.now(), {
+      threshold: 1,
+      error: "anchor down",
+    });
+
+    const s = svc({
+      deps: {
+        ...deps(),
+        health,
+      },
+    });
+
+    const res = await s.route({
+      method: "POST",
+      path: "/routes",
+      body: { corridorId: "test", sourceAmount: { asset: "USDC", amount: "100.00" } },
+    });
+    expect(res.status).toBe(200);
+    expect((res.body as { routes?: RouteOption[] }).routes).toEqual([]);
   });
 });
