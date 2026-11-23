@@ -16,6 +16,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   Documented in `docs/route-resolver.md`.
 - `tests/planner-contract.test.ts` runs the suite over a stub planner and asserts it fails a planner
   that breaks each rule.
+### Added — `RouteRequest`, `RoutePolicy`, `PriceLabel`, `RouteOption` and `RoutePlanner` types ([#603](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/603))
+
+- `@corridor/router` exports `RouteRequest`, `RoutePolicy`, `PriceLabel`, `RouteOption` and
+  `RoutePlanner` (`packages/router/src/planner.ts`), matching the route planner interface sketch
+  in `docs/rfcs/0004-smart-router.md` §1 with TSDoc on every type and field.
 
 ### Added — a custody statement ([#707](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/707))
 
