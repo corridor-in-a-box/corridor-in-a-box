@@ -16,6 +16,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   Documented in `docs/route-resolver.md`.
 - `tests/planner-contract.test.ts` runs the suite over a stub planner and asserts it fails a planner
   that breaks each rule.
+
 ### Added — wallet route manifest shape ([#646](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/646))
 
 - `protocol: wallet` destinations: the corridor declares `asset`, `asset_issuer` (optional), `settlement.network`
