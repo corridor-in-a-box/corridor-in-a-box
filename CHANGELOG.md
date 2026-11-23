@@ -16,6 +16,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   Documented in `docs/route-resolver.md`.
 - `tests/planner-contract.test.ts` runs the suite over a stub planner and asserts it fails a planner
   that breaks each rule.
+### Added — wallet route manifest shape ([#646](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/646))
+
+- `protocol: wallet` destinations: the corridor declares `asset`, `asset_issuer` (optional), `settlement.network`
+  and a `home_domain`; each `PaymentIntent` supplies the recipient `wallet` (`account`, optional `memo`/`memoType`),
+  validated by `WalletDestinationSchema`. Schema and validation only: a wallet lane is reported `not-runnable`
+  because the engine cannot execute one yet, and `corridor plan` is unchanged.
 
 ### Added — routing choice in the audit trail (#628)
 
