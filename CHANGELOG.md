@@ -16,6 +16,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   Documented in `docs/route-resolver.md`.
 - `tests/planner-contract.test.ts` runs the suite over a stub planner and asserts it fails a planner
   that breaks each rule.
+### Added — routing choice in the audit trail (#628)
+
+- `RouteDecision` takes an optional `ranking` (`OptionRanking` of `RankedOption`s in
+  `@corridor/router`). The engine records the chosen option, its RFC 0004 price label
+  (`locked` / `indicative` / `estimated`) and rank, and the reasons of the top three options
+  as `route` on the run's first audit entry out of `created`; `PostgresAuditSink` keeps it in
+  `detail`. When the resolver gives the chosen option no label, the run's own quote label is
+  recorded. Without a ranking the receiving adapter is recorded as the only option.
+  See `docs/route-resolver.md#recording-the-choice`.
 
 ### Added — `RouteRequest`, `RoutePolicy`, `PriceLabel`, `RouteOption` and `RoutePlanner` types ([#603](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/603))
 
