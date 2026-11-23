@@ -16,6 +16,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   Documented in `docs/route-resolver.md`.
 - `tests/planner-contract.test.ts` runs the suite over a stub planner and asserts it fails a planner
   that breaks each rule.
+
 ### Added — routing choice in the audit trail (#628)
 
 - `RouteDecision` takes an optional `ranking` (`OptionRanking` of `RankedOption`s in
