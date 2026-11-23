@@ -40,6 +40,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   `RoutePlanner` (`packages/router/src/planner.ts`), matching the route planner interface sketch
   in `docs/rfcs/0004-smart-router.md` §1 with TSDoc on every type and field.
 
+### Added — indicative price from SEP-38 `GET /price` ([#609](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/609))
+
+- `fetchIndicativePrice()` in `@corridor/router` reads an anchor's SEP-38 `GET /price` when it
+  offers no firm quote and returns an option labelled `indicative`. SEP-38 `price` is sell units
+  per one buy unit, so the destination amount is `buy_amount` (or `sell ÷ total_price` when the
+  anchor leaves it out), `rate` is buy per sell, and an answer whose
+  `total_price × buy_amount` misses `sell_amount` is refused.
+- Its ranking amount, `cautiousDestAmount`, is discounted by `estimateMarginBps`, 50 bps by
+  default (RFC 0004 D3), so an indicative option ranks below a firm one at the same raw rate.
+  `applyEstimateMargin()` and `DEFAULT_ESTIMATE_MARGIN_BPS` are exported alongside it.
+
 ### Added — a custody statement ([#707](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/707))
 
 - `docs/custody.md` says in one place that the project never holds funds or a key that can

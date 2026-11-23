@@ -3,7 +3,12 @@
 // When an anchor offers no firm quote (POST /quote) but exposes a live rate
 // feed (GET /price), the option is labelled "indicative" and its ranking amount
 // (`cautiousDestAmount`) is discounted by `estimateMarginBps`.
+//
+// SEP-38 `price` / `total_price` are SELL units per ONE BUY unit (the same way
+// adapter-kit reads a firm quote), so the buy amount is `sell ÷ price`, never
+// `sell × price`. The reported `rate` is the inverse: buy units per sell unit.
 
+import { totalPriceProblem } from "@corridor/adapter-kit";
 import {
   applyPrice,
   fail,
@@ -11,10 +16,12 @@ import {
   isValidAmount,
   ok,
   STROOP_SCALE,
+  toScaled,
   type Outcome,
 } from "@corridor/types";
 
-export const DEFAULT_ESTIMATE_MARGIN_BPS = 100; // 1.00%
+/** Default ranking discount for indicative prices: 50 bps (RFC 0004 D3). */
+export const DEFAULT_ESTIMATE_MARGIN_BPS = 50; // 0.50%
 
 export interface IndicativePriceRequest {
   readonly domain: string;
@@ -25,7 +32,7 @@ export interface IndicativePriceRequest {
   readonly sellAmount: string;
   /** SEP-38 context query parameter (default `"sep31"`). */
   readonly context?: string;
-  /** Safety discount applied to `destAmount` when ranking (default 100 bps). */
+  /** Safety discount applied to `destAmount` when ranking (default 50 bps). */
   readonly estimateMarginBps?: number;
   /** Optional SEP-10 bearer JWT if the anchor authenticates GET /price. */
   readonly authToken?: string;
@@ -39,6 +46,7 @@ export interface IndicativeRouteOption {
   readonly label: "indicative";
   readonly price: {
     readonly label: "indicative";
+    /** Buy (destination) units per one sell (source) unit. */
     readonly rate: string;
     readonly destAmount: string;
     readonly cautiousDestAmount: string;
@@ -68,6 +76,23 @@ export function applyEstimateMargin(
   const multiplierScaled = (BigInt(10_000 - marginBps) * factor) / 10_000n;
   const multiplier = fromScaled(multiplierScaled, scale);
   return applyPrice(amount, multiplier, scale);
+}
+
+/** `numerator ÷ denominator` on scaled integers, rounded half-up to `scale` places. */
+function divideAmounts(
+  numerator: string,
+  denominator: string,
+  scale = STROOP_SCALE,
+): Outcome<string> {
+  const n = toScaled(numerator, scale);
+  if (!n.ok) return n;
+  const d = toScaled(denominator, scale);
+  if (!d.ok) return d;
+  if (d.value === 0n) return fail("AMOUNT_INVALID", "cannot divide by a zero amount");
+  const factor = 10n ** BigInt(scale);
+  const scaledNumerator = n.value * factor;
+  const quotient = (scaledNumerator * 2n + d.value) / (2n * d.value);
+  return ok(fromScaled(quotient, scale));
 }
 
 function trimTrailingSlashes(value: string | undefined): string {
@@ -120,18 +145,45 @@ export async function fetchIndicativePrice(
       sell_amount?: string;
     };
 
-    const rate = body.price ?? body.total_price;
-    if (typeof rate !== "string" || !isValidAmount(rate)) {
-      return fail("QUOTE_UNAVAILABLE", `${req.domain}: GET /price returned invalid price`);
-    }
+    const sellAmount =
+      typeof body.sell_amount === "string" && isValidAmount(body.sell_amount)
+        ? body.sell_amount
+        : req.sellAmount;
+    // Sell units per one buy unit. `total_price` includes fees, so prefer it.
+    const sellPerBuy = [body.total_price, body.price].find(
+      (p): p is string => typeof p === "string" && isValidAmount(p),
+    );
 
     let destAmount: string;
     if (typeof body.buy_amount === "string" && isValidAmount(body.buy_amount)) {
       destAmount = body.buy_amount;
-    } else {
-      const derived = applyPrice(req.sellAmount, rate);
-      if (!derived.ok) return derived;
+    } else if (sellPerBuy) {
+      const derived = divideAmounts(sellAmount, sellPerBuy);
+      if (!derived.ok) {
+        return fail("QUOTE_UNAVAILABLE", `${req.domain}: GET /price returned a zero price`);
+      }
       destAmount = derived.value;
+    } else {
+      return fail(
+        "QUOTE_UNAVAILABLE",
+        `${req.domain}: GET /price returned neither buy_amount nor a valid price`,
+      );
+    }
+
+    const inconsistent = totalPriceProblem({
+      quoteId: "GET /price",
+      totalPrice: body.total_price,
+      buyAmount: destAmount,
+      sellAmount,
+    });
+    if (inconsistent) return fail("QUOTE_UNAVAILABLE", `${req.domain}: ${inconsistent}`);
+
+    const rate = divideAmounts(destAmount, sellAmount);
+    if (!rate.ok) {
+      return fail(
+        "QUOTE_UNAVAILABLE",
+        `${req.domain}: GET /price returned a zero sell_amount`,
+      );
     }
 
     const cautious = applyEstimateMargin(destAmount, marginBps);
@@ -144,7 +196,7 @@ export async function fetchIndicativePrice(
       label: "indicative",
       price: {
         label: "indicative",
-        rate,
+        rate: rate.value,
         destAmount,
         cautiousDestAmount: cautious.value,
       },
