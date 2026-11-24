@@ -140,8 +140,7 @@ this country", and takes the first steps toward mainnet. These are workstreams t
 by side, not ordered phases.
 
 Every item is open and links the issues it is made of; the acceptance criteria live there.
-The design reference is RFC 0004, the smart router. It is not on `main` yet, so nothing here
-links it.
+The design reference is [RFC 0004, the smart router](docs/rfcs/0004-smart-router.md).
 
 ### Smart router
 
