@@ -21,6 +21,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 - `anclap.com.ar` (#654): the domain does not exist in DNS (NXDOMAIN, no name servers).
 - Dated findings are in `contracts/anchors.json`; `tests/probe-anchor-findings.test.ts` checks the
   records and that the probe reports an unreachable SEP-31 host as a `sep31_info` failure.
+
 ### Added — send app page scaffold with a permanent testnet banner ([#684](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/684))
 
 - New `/send` route in the web app (`web/app/send/layout.tsx`, `web/app/send/page.tsx`) with a
