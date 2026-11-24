@@ -15,8 +15,8 @@
 
 import { Contract, rpc, scValToNative, TransactionBuilder, Account, nativeToScVal } from "@stellar/stellar-sdk";
 import deployments from "../../contracts/deployments.json";
-import anchorsData from "../../contracts/anchors.json";
-import { corridors } from "./corridors";
+import fleet from "../../contracts/anchors.json";
+import { parseNetwork, type NetworkId } from "./network";
 
 /** SEP numbers in the registry's bit order. Mirrors SEP_NUMBERS in the contract. */
 export const SEP_NUMBERS = [1, 6, 10, 12, 24, 31, 38] as const;
@@ -46,8 +46,16 @@ export interface AnchorAttestation {
   staleness: number;
   /** Advertises SEP-31 AND passed the SEP-31 probe. Not the same as advertising it. */
   servesSep31: boolean;
+  /**
+   * OBSERVED: asset codes the anchor's SEP-31 `/info` listed as receivable, from the
+   * registry's `get_meta`. Absent when no metadata was attested for the domain.
+   */
   receiveAssets?: string[];
-  country?: string;
+  /**
+   * DECLARED, never attested: the country in the anchor's own stellar.toml (`get_meta`)
+   * plus the curator's `countries` for it in contracts/anchors.json. Absent when neither
+   * names one.
+   */
   countries?: string[];
 }
 
@@ -65,8 +73,18 @@ function config(network: string) {
   return cfg?.registry ? cfg : undefined;
 }
 
-export const REGISTRY_NETWORK: string = process.env.STELLAR_NETWORK ?? "testnet";
-export const REGISTRY_ID: string | undefined = config(REGISTRY_NETWORK)?.registry ?? undefined;
+/**
+ * The network a page reads when it is not told which: `STELLAR_NETWORK`, or testnet. A value
+ * that names neither network also means testnet, and every card says which network it shows.
+ */
+export const REGISTRY_NETWORK: NetworkId = parseNetwork(process.env.STELLAR_NETWORK) ?? "testnet";
+
+/** The registry contract on a network, or undefined while none is deployed there. */
+export function registryId(network: string): string | undefined {
+  return config(network)?.registry ?? undefined;
+}
+
+export const REGISTRY_ID: string | undefined = registryId(REGISTRY_NETWORK);
 
 function decode<T>(mask: number, names: readonly T[]): T[] {
   return names.filter((_, i) => (mask & (1 << i)) !== 0);
@@ -82,9 +100,13 @@ interface RawRecord {
   attester: string;
 }
 
-async function read<T>(method: string, args: ReturnType<typeof nativeToScVal>[] = []): Promise<T> {
-  const cfg = config(REGISTRY_NETWORK);
-  if (!cfg?.registry) throw new Error(`no registry deployed on ${REGISTRY_NETWORK}`);
+async function read<T>(
+  network: string,
+  method: string,
+  args: ReturnType<typeof nativeToScVal>[] = [],
+): Promise<T> {
+  const cfg = config(network);
+  if (!cfg?.registry) throw new Error(`no registry deployed on ${network}`);
 
   const server = new rpc.Server(cfg.rpcUrl);
   const contract = new Contract(cfg.registry);
@@ -104,6 +126,32 @@ async function read<T>(method: string, args: ReturnType<typeof nativeToScVal>[] 
 
 const str = (s: string) => nativeToScVal(s, { type: "string" });
 
+interface RawMeta {
+  receive_assets: string[];
+  country?: string | null;
+}
+
+/** Curator-declared countries per domain, from contracts/anchors.json. */
+const DECLARED_COUNTRIES = new Map(
+  (fleet.anchors as Array<{ domain: string; countries?: string[] }>).map((a) => [
+    a.domain,
+    a.countries ?? [],
+  ]),
+);
+
+/**
+ * The registry's metadata for a domain, or undefined when it has none. `get_meta` fails for a
+ * domain no attester has written metadata for; that is "nothing observed", not a read error,
+ * so it must not hide the anchor's attestation.
+ */
+async function readMeta(network: string, domain: string): Promise<RawMeta | undefined> {
+  try {
+    return await read<RawMeta>(network, "get_meta", [str(domain)]);
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Every attestation in the registry.
  *
@@ -113,9 +161,15 @@ const str = (s: string) => nativeToScVal(s, { type: "string" });
  *
  * `readAt` and `latestLedger` say when this snapshot was taken, so a page that
  * serves it from cache can say how old it is instead of presenting it as live.
+ *
+ * `deployed` is false when the network has no registry at all. That is a third
+ * answer, apart from "could not read" and "read, and it is empty": there is
+ * nothing to call, so nothing is called.
  */
-export async function fetchAttestations(): Promise<{
+export async function fetchAttestations(network: string = REGISTRY_NETWORK): Promise<{
   ok: boolean;
+  /** Whether this network has a registry to read. */
+  deployed: boolean;
   error?: string;
   anchors: AnchorAttestation[];
   /** ISO time the read started. Set even when the read failed. */
@@ -124,60 +178,39 @@ export async function fetchAttestations(): Promise<{
   latestLedger?: number;
 }> {
   const readAt = new Date().toISOString();
+  const cfg = config(network);
+  if (!cfg) {
+    return {
+      ok: false,
+      deployed: false,
+      error: `no registry deployed on ${network}`,
+      anchors: [],
+      readAt,
+    };
+  }
   try {
-    const cfg = config(REGISTRY_NETWORK);
     // Read before the anchors so the ledger is a lower bound on what they reflect.
     // Best-effort: the ledger only labels the snapshot, so failing to get it
     // must not hide attestations that read fine.
-    const latestLedger = cfg
-      ? await new rpc.Server(cfg.rpcUrl)
-          .getLatestLedger()
-          .then((l) => l.sequence)
-          .catch(() => undefined)
-      : undefined;
-    const domains = await read<string[]>("domains");
+    const latestLedger = await new rpc.Server(cfg.rpcUrl)
+      .getLatestLedger()
+      .then((l) => l.sequence)
+      .catch(() => undefined);
+    const domains = await read<string[]>(network, "domains");
     const anchors = await Promise.all(
       domains.map(async (domain) => {
-        const raw = await read<RawRecord>("get_anchor", [str(domain)]);
-        const [servesSep31, staleness] = await Promise.all([
-          read<boolean>("serves_sep31", [str(domain)]),
-          read<number>("staleness", [str(domain)]),
+        const raw = await read<RawRecord>(network, "get_anchor", [str(domain)]);
+        const [servesSep31, staleness, meta] = await Promise.all([
+          read<boolean>(network, "serves_sep31", [str(domain)]),
+          read<number>(network, "staleness", [str(domain)]),
+          readMeta(network, domain),
         ]);
-
-        let metaReceiveAssets: string[] | undefined;
-        let metaCountry: string | undefined;
-        try {
-          const rawMeta = await read<{
-            domain: string;
-            receive_assets: string[];
-            country?: string | null;
-            attested_ledger: number;
-            attester: string;
-          }>("get_meta", [str(domain)]);
-          if (rawMeta) {
-            metaReceiveAssets = rawMeta.receive_assets;
-            if (rawMeta.country) metaCountry = rawMeta.country;
-          }
-        } catch {
-          // get_meta is optional or not present on older contracts
-        }
-
-        const anchorEntry = (
-          anchorsData.anchors as Array<{ domain: string; countries?: string[] }>
-        ).find((a) => a.domain === domain);
-        const declaredCountries = anchorEntry?.countries ?? [];
-        const corridorAssets = corridors
-          .filter((c) => c.dest?.endpoints?.home_domain === domain && c.dest?.asset)
-          .map((c) => c.dest.asset.replace(/^iso4217:/, ""));
-
-        const allAssets = Array.from(
-          new Set([...(metaReceiveAssets ?? []), ...corridorAssets]),
-        ).filter(Boolean);
-
-        const allCountries = Array.from(
-          new Set([...(metaCountry ? [metaCountry] : []), ...declaredCountries]),
-        ).filter(Boolean);
-
+        const countries = [
+          ...new Set([
+            ...(meta?.country ? [meta.country] : []),
+            ...(DECLARED_COUNTRIES.get(raw.domain) ?? []),
+          ]),
+        ];
         return {
           domain: raw.domain,
           seps: decode(raw.seps, SEP_NUMBERS) as number[],
@@ -188,17 +221,17 @@ export async function fetchAttestations(): Promise<{
           attester: raw.attester,
           staleness,
           servesSep31,
-          receiveAssets: allAssets.length > 0 ? allAssets : undefined,
-          country: metaCountry ?? declaredCountries[0] ?? undefined,
-          countries: allCountries.length > 0 ? allCountries : undefined,
+          ...(meta && meta.receive_assets.length > 0 ? { receiveAssets: meta.receive_assets } : {}),
+          ...(countries.length > 0 ? { countries } : {}),
         } satisfies AnchorAttestation;
       }),
     );
     anchors.sort((a, b) => a.domain.localeCompare(b.domain));
-    return { ok: true, anchors, readAt, latestLedger };
+    return { ok: true, deployed: true, anchors, readAt, latestLedger };
   } catch (e) {
     return {
       ok: false,
+      deployed: true,
       error: e instanceof Error ? e.message : String(e),
       anchors: [],
       readAt,

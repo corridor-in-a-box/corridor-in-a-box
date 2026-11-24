@@ -5,8 +5,10 @@ import {
   PostgresRateHistoryStore,
   migrate,
   type Queryable,
-  type RateSampleRecord,
+  type RateSampleInput,
 } from "@corridor/engine";
+
+const USDC = "stellar:USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
 
 function fakeDb(rows: Record<string, unknown>[] = []) {
   const calls: { text: string; params?: unknown[] }[] = [];
@@ -19,35 +21,32 @@ function fakeDb(rows: Record<string, unknown>[] = []) {
   return { db, calls };
 }
 
+const sample = (over: Partial<RateSampleInput> = {}): RateSampleInput => ({
+  sellAsset: USDC,
+  buyAsset: "iso4217:BRL",
+  source: "own_payment",
+  anchorDomain: "ntokens.com",
+  rate: "5.4512345678901234",
+  sampledAt: 1700000000000,
+  network: "public",
+  runId: "run_test_123",
+  detail: { note: "completed payment rate" },
+  ...over,
+});
+
 describe("PostgresRateHistoryStore", () => {
-  it("records rate sample with numeric rate string (never float)", async () => {
+  it("records the rate as the exact decimal string it was given, never a float", async () => {
     const { db, calls } = fakeDb();
-    const store = new PostgresRateHistoryStore(db);
-
-    const sample: RateSampleRecord = {
-      pair: "USDC:iso4217:BRL",
-      sellAsset: "USDC",
-      buyAsset: "iso4217:BRL",
-      source: "own_payment",
-      anchorDomain: "ntokens.com",
-      rate: "5.4512345678901234",
-      sampledAt: 1700000000000,
-      network: "public",
-      runId: "run_test_123",
-      detail: { note: "completed payment rate" },
-    };
-
-    await store.record(sample);
+    await new PostgresRateHistoryStore(db).record(sample());
 
     expect(calls).toHaveLength(1);
     expect(calls[0]!.text).toMatch(/insert into rate_samples/);
     expect(calls[0]!.params).toEqual([
-      "USDC:iso4217:BRL",
-      "USDC",
+      USDC,
       "iso4217:BRL",
       "own_payment",
       "ntokens.com",
-      "5.4512345678901234", // Preserved as exact decimal string, never converted to float
+      "5.4512345678901234",
       new Date(1700000000000).toISOString(),
       "public",
       "run_test_123",
@@ -55,32 +54,52 @@ describe("PostgresRateHistoryStore", () => {
     ]);
   });
 
-  it("infers pair from sellAsset and buyAsset if omitted", async () => {
+  it("stores null for the optional anchor, run and detail", async () => {
     const { db, calls } = fakeDb();
-    const store = new PostgresRateHistoryStore(db);
-
-    await store.record({
-      sellAsset: "USDC",
+    await new PostgresRateHistoryStore(db).record({
+      sellAsset: USDC,
       buyAsset: "iso4217:NGN",
-      source: "sep38_price",
+      source: "dex_trade",
       rate: "1650.5000000",
       sampledAt: new Date("2026-11-19T12:00:00Z"),
       network: "testnet",
     });
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.params?.[0]).toBe("USDC:iso4217:NGN");
-    expect(calls[0]!.params?.[4]).toBeNull(); // anchorDomain
-    expect(calls[0]!.params?.[8]).toBeNull(); // runId
-    expect(calls[0]!.params?.[9]).toBeNull(); // detail
+    expect(calls[0]!.params?.[3]).toBeNull();
+    expect(calls[0]!.params?.[7]).toBeNull();
+    expect(calls[0]!.params?.[8]).toBeNull();
   });
 
-  it("lists rate samples filtering by pair, network, source, and window", async () => {
-    const mockRows = [
+  it.each([
+    ["a JS number", 5.45 as unknown as string],
+    ["an exponent", "5e2"],
+    ["a negative rate", "-1.2"],
+    ["a zero rate", "0.000"],
+    ["an empty string", ""],
+  ])("rejects %s as a rate without querying", async (_label, rate) => {
+    const { db, calls } = fakeDb();
+    await expect(new PostgresRateHistoryStore(db).record(sample({ rate }))).rejects.toThrow(
+      RangeError,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  it("rejects an unknown source and an invalid time", async () => {
+    const { db, calls } = fakeDb();
+    const store = new PostgresRateHistoryStore(db);
+    await expect(
+      store.record(sample({ source: "guess" as unknown as RateSampleInput["source"] })),
+    ).rejects.toThrow(/source/);
+    await expect(store.record(sample({ sampledAt: "not a date" }))).rejects.toThrow(
+      /sampledAt/,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  it("lists a window for one pair and network, newest first", async () => {
+    const { db, calls } = fakeDb([
       {
-        id: "1",
-        pair: "USDC:iso4217:BRL",
-        sell_asset: "USDC",
+        id: 1,
+        sell_asset: USDC,
         buy_asset: "iso4217:BRL",
         source: "sep38_price",
         anchor_domain: "ntokens.com",
@@ -90,27 +109,41 @@ describe("PostgresRateHistoryStore", () => {
         run_id: null,
         detail: null,
       },
-    ];
+    ]);
 
-    const { db, calls } = fakeDb(mockRows);
-    const store = new PostgresRateHistoryStore(db);
-
-    const results = await store.list({
-      pair: "USDC:iso4217:BRL",
+    const results = await new PostgresRateHistoryStore(db).list({
+      sellAsset: USDC,
+      buyAsset: "iso4217:BRL",
       network: "public",
       source: "sep38_price",
       since: 1700000000000,
       limit: 50,
     });
 
-    expect(calls).toHaveLength(1);
     expect(calls[0]!.text).toMatch(
-      /where pair = \$1 and source = \$2 and network = \$3 and sampled_at >= \$4/,
+      /where sell_asset = \$1 and buy_asset = \$2 and source = \$3 and network = \$4 and sampled_at >= \$5/,
     );
     expect(calls[0]!.text).toMatch(/order by sampled_at desc/);
     expect(calls[0]!.text).toMatch(/limit 50/);
-    expect(results).toHaveLength(1);
-    expect(results[0]!.rate).toBe("5.5000000");
+    expect(results).toEqual([
+      {
+        id: "1",
+        sellAsset: USDC,
+        buyAsset: "iso4217:BRL",
+        source: "sep38_price",
+        anchorDomain: "ntokens.com",
+        rate: "5.5000000",
+        sampledAt: Date.parse("2026-11-19T12:00:00Z"),
+        network: "public",
+        runId: null,
+        detail: null,
+      },
+    ]);
+  });
+
+  it("rejects a limit that is not a positive integer", async () => {
+    const { db } = fakeDb();
+    await expect(new PostgresRateHistoryStore(db).list({ limit: 0 })).rejects.toThrow(/limit/);
   });
 
   it("is created and indexed by migrate()", async () => {
@@ -118,8 +151,9 @@ describe("PostgresRateHistoryStore", () => {
     await migrate(db);
     const sqlCalls = calls.map((c) => c.text);
     expect(sqlCalls).toContain(CREATE_RATE_SAMPLES_TABLE_SQL);
-    for (const indexSql of RATE_SAMPLES_INDEX_SQL) {
-      expect(sqlCalls).toContain(indexSql);
-    }
+    for (const indexSql of RATE_SAMPLES_INDEX_SQL) expect(sqlCalls).toContain(indexSql);
+    // Rates are numeric in the schema, never a float type.
+    expect(CREATE_RATE_SAMPLES_TABLE_SQL).toMatch(/rate\s+numeric not null/);
+    expect(CREATE_RATE_SAMPLES_TABLE_SQL).not.toMatch(/real|double precision|float/);
   });
 });

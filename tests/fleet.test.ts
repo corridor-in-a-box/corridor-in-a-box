@@ -24,11 +24,14 @@ describe("contracts/anchors.json fleet", () => {
       "stellar-sep-24.banxa.com",
       "flutterwave.com",
       "bitso.com",
+      "audd.digital",
+      "cebuanalhuillier.com",
+      "perahub.com.ph",
+      "ripplefox.com",
+      "fchain.io",
       "ntokens.com",
       "pubnet-sep.latamex.com",
       "etherfuse.com",
-      "amero.exchange",
-      "ripio.com",
     ]);
     expect(fleet.anchors.map((a) => ({ domain: a.domain, kind: a.kind }))).toEqual([
       { domain: "testanchor.stellar.org", kind: "test" },
@@ -50,11 +53,14 @@ describe("contracts/anchors.json fleet", () => {
       { domain: "stellar-sep-24.banxa.com", kind: "other" },
       { domain: "flutterwave.com", kind: "other" },
       { domain: "bitso.com", kind: "other" },
-      { domain: "ntokens.com", kind: "offramp" },
-      { domain: "pubnet-sep.latamex.com", kind: "offramp" },
+      { domain: "audd.digital", kind: "other" },
+      { domain: "cebuanalhuillier.com", kind: "other" },
+      { domain: "perahub.com.ph", kind: "other" },
+      { domain: "ripplefox.com", kind: "other" },
+      { domain: "fchain.io", kind: "other" },
+      { domain: "ntokens.com", kind: "other" },
+      { domain: "pubnet-sep.latamex.com", kind: "other" },
       { domain: "etherfuse.com", kind: "other" },
-      { domain: "amero.exchange", kind: "other" },
-      { domain: "ripio.com", kind: "other" },
     ]);
   });
 

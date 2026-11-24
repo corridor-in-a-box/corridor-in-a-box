@@ -1,18 +1,21 @@
-// Integration test for rate_samples schema and PostgresRateHistoryStore against REAL Postgres.
+// Integration test for the rate_samples schema and PostgresRateHistoryStore against a REAL
+// Postgres (#589).
 //
-// Opt-in, like breaker-pg.test.ts and audit-pg.test.ts: skipped unless
-// CORRIDOR_TEST_DATABASE_URL is set. CI provides a Postgres service container.
+// Opt-in, like audit-pg.test.ts and breaker-pg.test.ts: skipped unless
+// CORRIDOR_TEST_DATABASE_URL is set. CI provides a Postgres service container
+// (.github/workflows/ci.yml). Locally:
+//
+//   docker run --rm -e POSTGRES_PASSWORD=pg -p 5432:5432 postgres:16
+//   CORRIDOR_TEST_DATABASE_URL=postgres://postgres:pg@localhost:5432/postgres \
+//     pnpm exec vitest run tests/integration/rate-samples-pg.test.ts
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import {
-  PostgresRateHistoryStore,
-  migrate,
-  type Queryable,
-  type RateSampleRecord,
-} from "@corridor/engine";
+import { PostgresRateHistoryStore, migrate, type Queryable } from "@corridor/engine";
 
 const url = process.env.CORRIDOR_TEST_DATABASE_URL;
 const run = url ? describe : describe.skip;
+
+const USDC = "stellar:USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
 
 run("Postgres rate_samples schema and store (live Postgres)", () => {
   let pool: { query: Queryable["query"]; end: () => Promise<void> };
@@ -33,17 +36,10 @@ run("Postgres rate_samples schema and store (live Postgres)", () => {
 
   const store = () => new PostgresRateHistoryStore(pool as unknown as Queryable);
 
-  it("migrate() is idempotent and creates the rate_samples table and indices", async () => {
-    // Re-running migrate() on an already migrated database must be an idempotent no-op
+  it("migrate() is idempotent and leaves rate as numeric, sampled_at as timestamptz", async () => {
+    await migrate(pool as unknown as Queryable);
     await migrate(pool as unknown as Queryable);
 
-    const tableRes = await pool.query(
-      "select count(*)::int as n from information_schema.tables where table_name = $1",
-      ["rate_samples"],
-    );
-    expect(tableRes.rows[0].n).toBe(1);
-
-    // Verify column types: rate is numeric, sampled_at is timestamp with time zone
     const colRes = await pool.query(
       "select column_name, data_type from information_schema.columns where table_name = $1",
       ["rate_samples"],
@@ -56,28 +52,22 @@ run("Postgres rate_samples schema and store (live Postgres)", () => {
     );
     expect(cols.rate).toBe("numeric");
     expect(cols.sampled_at).toBe("timestamp with time zone");
-    expect(cols.pair).toBe("text");
     expect(cols.sell_asset).toBe("text");
     expect(cols.buy_asset).toBe("text");
     expect(cols.source).toBe("text");
 
-    // Verify indices exist
     const idxRes = await pool.query("select indexname from pg_indexes where tablename = $1", [
       "rate_samples",
     ]);
-    const indexNames = (idxRes.rows as Array<{ indexname: string }>).map((r) => r.indexname);
-    expect(indexNames).toContain("rate_samples_pair_network_sampled_at_idx");
-    expect(indexNames).toContain("rate_samples_assets_network_sampled_at_idx");
+    expect((idxRes.rows as Array<{ indexname: string }>).map((r) => r.indexname)).toContain(
+      "rate_samples_pair_network_sampled_at_idx",
+    );
   });
 
-  it("stores rates as exact numerics with no floating point loss", async () => {
-    const s = store();
-    // High-precision decimal that would suffer floating point representation errors in IEEE-754 float
+  it("round-trips a high-precision rate exactly", async () => {
     const preciseRate = "1650.1234567890123456";
-
-    const sample: RateSampleRecord = {
-      pair: "USDC:iso4217:NGN",
-      sellAsset: "USDC",
+    await store().record({
+      sellAsset: USDC,
       buyAsset: "iso4217:NGN",
       source: "own_payment",
       rate: preciseRate,
@@ -85,43 +75,59 @@ run("Postgres rate_samples schema and store (live Postgres)", () => {
       network: "public",
       anchorDomain: "cowrie.exchange",
       runId: "run_precise_1",
-    };
+    });
 
-    await s.record(sample);
-
-    const listed = await s.list({ pair: "USDC:iso4217:NGN" });
+    const listed = await store().list({ sellAsset: USDC, buyAsset: "iso4217:NGN" });
     expect(listed).toHaveLength(1);
     expect(listed[0]!.rate).toBe(preciseRate);
     expect(listed[0]!.anchorDomain).toBe("cowrie.exchange");
+    expect(listed[0]!.sampledAt).toBe(Date.parse("2026-11-19T14:30:00Z"));
   });
 
-  it("supports window queries by pair, network, and time range", async () => {
-    const s = store();
+  it("returns a window for one pair and network, newest first", async () => {
     const t0 = Date.parse("2026-11-19T10:00:00Z");
-
-    // Insert samples over time
     for (let i = 0; i < 5; i++) {
-      await s.record({
-        pair: "USDC:iso4217:BRL",
-        sellAsset: "USDC",
+      await store().record({
+        sellAsset: USDC,
         buyAsset: "iso4217:BRL",
         source: "sep38_price",
         rate: `5.4${i}0000`,
-        sampledAt: t0 + i * 3600 * 1000, // every hour
+        sampledAt: t0 + i * 3_600_000,
         network: "public",
       });
     }
-
-    // Query window between hour 1 and hour 3
-    const window = await s.list({
-      pair: "USDC:iso4217:BRL",
-      network: "public",
-      since: t0 + 1 * 3600 * 1000,
-      until: t0 + 3 * 3600 * 1000,
+    // Same pair on the other network: must not leak into the window.
+    await store().record({
+      sellAsset: USDC,
+      buyAsset: "iso4217:BRL",
+      source: "sep38_price",
+      rate: "9.99",
+      sampledAt: t0 + 2 * 3_600_000,
+      network: "testnet",
     });
 
-    expect(window).toHaveLength(3);
-    // Ordered descending by sampled_at
+    const window = await store().list({
+      sellAsset: USDC,
+      buyAsset: "iso4217:BRL",
+      network: "public",
+      since: t0 + 3_600_000,
+      until: t0 + 3 * 3_600_000,
+    });
     expect(window.map((w) => w.rate)).toEqual(["5.430000", "5.420000", "5.410000"]);
+  });
+
+  it("refuses a non-positive rate and an unknown source at the database too", async () => {
+    await expect(
+      pool.query(
+        "insert into rate_samples (sell_asset, buy_asset, source, rate, sampled_at, network) values ($1, $2, $3, $4, now(), $5)",
+        [USDC, "iso4217:BRL", "sep38_price", "0", "public"],
+      ),
+    ).rejects.toThrow();
+    await expect(
+      pool.query(
+        "insert into rate_samples (sell_asset, buy_asset, source, rate, sampled_at, network) values ($1, $2, $3, $4, now(), $5)",
+        [USDC, "iso4217:BRL", "guess", "1", "public"],
+      ),
+    ).rejects.toThrow();
   });
 });

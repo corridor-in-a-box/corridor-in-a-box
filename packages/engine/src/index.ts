@@ -40,6 +40,7 @@ export {
   type RecordOutcomeOptions,
 } from "./breaker";
 export { PostgresAuditSink, CREATE_AUDIT_TABLE_SQL } from "./audit-pg";
+export { routeChoiceFor, ROUTE_CHOICE_TOP_N } from "./route-choice";
 export {
   PostgresCorridorHealthStore,
   CREATE_BREAKERS_TABLE_SQL,
@@ -48,7 +49,10 @@ export {
 export {
   CREATE_RATE_SAMPLES_TABLE_SQL,
   RATE_SAMPLES_INDEX_SQL,
+  RATE_SAMPLE_SOURCES,
   PostgresRateHistoryStore,
+  assertRateSample,
+  type RateSampleInput,
   type RateSampleRecord,
   type RateSampleSource,
   type ListRateSamplesFilter,
@@ -117,6 +121,8 @@ export {
   type AuditSink,
   type AuditEntry,
   type AuditDetail,
+  type RouteChoice,
+  type RouteChoiceOption,
   type Alert,
   type AlertKind,
   type Alerting,

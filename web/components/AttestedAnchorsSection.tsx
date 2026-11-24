@@ -1,242 +1,181 @@
 "use client";
 
-import { useMemo, useCallback } from "react";
-import { useSearchParams, useRouter, usePathname } from "next/navigation";
-import { Search, RotateCcw, Filter } from "lucide-react";
+import { useId, useMemo, useSyncExternalStore } from "react";
+import { RotateCcw, Search } from "lucide-react";
 import { AnchorCard } from "@/components/AnchorCard";
+import {
+  EMPTY_FILTERS,
+  SEP_OPTIONS,
+  filterChoices,
+  filterSearch,
+  hasFilters,
+  matchesFilters,
+  parseFilters,
+  type AnchorFilters,
+} from "@/lib/anchor-filters";
+import type { NetworkId } from "@/lib/network";
 import type { AnchorAttestation } from "@/lib/registry";
 
-interface AttestedAnchorsSectionProps {
-  anchors: AnchorAttestation[];
+/** Fired after a filter rewrites the URL, since `replaceState` raises no event of its own. */
+const CHANGED = "corridor:anchor-filters-changed";
+
+function subscribe(onChange: () => void): () => void {
+  window.addEventListener("popstate", onChange);
+  window.addEventListener(CHANGED, onChange);
+  return () => {
+    window.removeEventListener("popstate", onChange);
+    window.removeEventListener(CHANGED, onChange);
+  };
 }
 
-export function AttestedAnchorsSection({ anchors }: AttestedAnchorsSectionProps) {
-  const router = useRouter();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
+const control =
+  "w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-primary-text transition-colors focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/30";
 
-  const sepParam = searchParams.get("sep") ?? "";
-  const assetParam = searchParams.get("asset") ?? "";
-  const countryParam = searchParams.get("country") ?? "";
-  const qParam = searchParams.get("q") ?? "";
-
-  const updateParam = useCallback(
-    (key: string, value: string) => {
-      const params = new URLSearchParams(searchParams.toString());
-      if (value.trim()) {
-        params.set(key, value.trim());
-      } else {
-        params.delete(key);
-      }
-      const qs = params.toString();
-      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
-    },
-    [router, pathname, searchParams],
+/**
+ * One network's attested anchors with filters for SEP, received asset, declared country and
+ * domain (#668).
+ *
+ * Like NetworkSwitch, the filters are read from the URL with `useSyncExternalStore`, not
+ * `useSearchParams`: that hook needs a Suspense boundary on a prerendered page and leaves what
+ * is inside it out of the served HTML. Here the server renders every anchor unfiltered and the
+ * browser applies the URL's filters once it has them.
+ */
+export function AttestedAnchorsSection({
+  anchors,
+  network,
+}: {
+  anchors: AnchorAttestation[];
+  network: NetworkId;
+}) {
+  const search = useSyncExternalStore(
+    subscribe,
+    () => window.location.search,
+    () => "",
   );
+  const filters = useMemo(() => parseFilters(search), [search]);
+  const choices = useMemo(() => filterChoices(anchors), [anchors]);
+  const shown = useMemo(() => anchors.filter((a) => matchesFilters(a, filters)), [anchors, filters]);
+  const active = hasFilters(filters);
+  const id = useId();
 
-  const clearAllFilters = useCallback(() => {
-    router.replace(pathname, { scroll: false });
-  }, [router, pathname]);
-
-  // Extract distinct assets and countries across all anchors for the dropdowns
-  const availableAssets = useMemo(() => {
-    const set = new Set<string>();
-    for (const a of anchors) {
-      if (a.receiveAssets) {
-        for (const asset of a.receiveAssets) {
-          set.add(asset);
-        }
-      }
-    }
-    return Array.from(set).sort();
-  }, [anchors]);
-
-  const availableCountries = useMemo(() => {
-    const set = new Set<string>();
-    for (const a of anchors) {
-      if (a.countries) {
-        for (const c of a.countries) {
-          set.add(c);
-        }
-      } else if (a.country) {
-        set.add(a.country);
-      }
-    }
-    return Array.from(set).sort();
-  }, [anchors]);
-
-  const filteredAnchors = useMemo(() => {
-    return anchors.filter((a) => {
-      // SEP filter
-      if (sepParam) {
-        if (sepParam === "31-served") {
-          if (!a.servesSep31) return false;
-        } else {
-          const sepNum = Number.parseInt(sepParam, 10);
-          if (Number.isInteger(sepNum)) {
-            if (!a.seps.includes(sepNum)) return false;
-          }
-        }
-      }
-
-      // Asset filter
-      if (assetParam) {
-        if (!a.receiveAssets || !a.receiveAssets.includes(assetParam)) {
-          return false;
-        }
-      }
-
-      // Country filter
-      if (countryParam) {
-        const matchesCountry =
-          (a.countries && a.countries.includes(countryParam)) ||
-          a.country === countryParam;
-        if (!matchesCountry) return false;
-      }
-
-      // Search term (domain)
-      if (qParam) {
-        const query = qParam.toLowerCase();
-        if (!a.domain.toLowerCase().includes(query)) {
-          return false;
-        }
-      }
-
-      return true;
-    });
-  }, [anchors, sepParam, assetParam, countryParam, qParam]);
-
-  const hasActiveFilters = Boolean(sepParam || assetParam || countryParam || qParam);
+  function update(next: AnchorFilters) {
+    const { pathname, search: current, hash } = window.location;
+    window.history.replaceState(null, "", `${pathname}${filterSearch(current, next)}${hash}`);
+    window.dispatchEvent(new Event(CHANGED));
+  }
+  const set = (key: keyof AnchorFilters) => (value: string) => update({ ...filters, [key]: value });
 
   return (
-    <div className="flex flex-col gap-6">
-      {/* Controls Bar */}
-      <div className="flex flex-col gap-3 rounded-xl border border-border bg-bg-subtle p-4">
-        <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-secondary-text">
-          <Filter size={14} className="text-blue-600" /> Filter anchors
-        </div>
-
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4">
-          {/* Domain text search */}
-          <div className="relative">
+    <div className="flex flex-col gap-4">
+      <div
+        role="search"
+        aria-label="Filter anchors"
+        className="grid grid-cols-1 gap-3 rounded-xl border border-border bg-bg-subtle p-4 sm:grid-cols-2 lg:grid-cols-4"
+      >
+        <label className="flex flex-col gap-1 text-xs font-medium text-secondary-text">
+          Domain
+          <span className="relative">
             <Search
               size={14}
-              className="absolute left-3 top-1/2 -translate-y-1/2 text-secondary-text"
+              aria-hidden="true"
+              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-secondary-text"
             />
             <input
-              type="text"
-              value={qParam}
-              onChange={(e) => updateParam("q", e.target.value)}
-              placeholder="Search domain..."
-              aria-label="Filter anchors by domain name"
-              className="w-full rounded-lg border border-border bg-card-bg py-2 pl-9 pr-3 text-sm text-primary-text placeholder:text-secondary-text/60 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              type="search"
+              value={filters.q}
+              onChange={(e) => set("q")(e.target.value)}
+              placeholder="e.g. cowrie"
+              className={`${control} pl-9`}
             />
-          </div>
-
-          {/* SEP filter */}
-          <div>
-            <label htmlFor="filter-sep" className="sr-only">
-              Filter by SEP
-            </label>
-            <select
-              id="filter-sep"
-              value={sepParam}
-              onChange={(e) => updateParam("sep", e.target.value)}
-              className="w-full rounded-lg border border-border bg-card-bg px-3 py-2 text-sm text-primary-text focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-            >
-              <option value="">All SEPs</option>
-              <option value="31-served">SEP-31 (Served & Probed)</option>
-              <option value="31">SEP-31 (Advertised)</option>
-              <option value="6">SEP-6 (Deposit/Withdrawal)</option>
-              <option value="24">SEP-24 (Hosted Transfer)</option>
-              <option value="38">SEP-38 (Anchor Quotes)</option>
-              <option value="10">SEP-10 (Authentication)</option>
-              <option value="12">SEP-12 (KYC)</option>
-              <option value="1">SEP-1 (stellar.toml)</option>
-            </select>
-          </div>
-
-          {/* Asset filter */}
-          <div>
-            <label htmlFor="filter-asset" className="sr-only">
-              Filter by asset
-            </label>
-            <select
-              id="filter-asset"
-              value={assetParam}
-              onChange={(e) => updateParam("asset", e.target.value)}
-              className="w-full rounded-lg border border-border bg-card-bg px-3 py-2 text-sm text-primary-text focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-            >
-              <option value="">All Assets</option>
-              {availableAssets.map((asset) => (
-                <option key={asset} value={asset}>
-                  {asset}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Country filter */}
-          <div>
-            <label htmlFor="filter-country" className="sr-only">
-              Filter by country
-            </label>
-            <select
-              id="filter-country"
-              value={countryParam}
-              onChange={(e) => updateParam("country", e.target.value)}
-              className="w-full rounded-lg border border-border bg-card-bg px-3 py-2 text-sm text-primary-text focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-            >
-              <option value="">All Countries</option>
-              {availableCountries.map((country) => (
-                <option key={country} value={country}>
-                  {country}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        {/* Counter and clear actions */}
-        <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-xs text-secondary-text">
-          <div>
-            Showing <span className="font-semibold text-primary-text">{filteredAnchors.length}</span>{" "}
-            of <span className="font-semibold text-primary-text">{anchors.length}</span> anchors
-          </div>
-
-          {hasActiveFilters && (
-            <button
-              type="button"
-              onClick={clearAllFilters}
-              className="inline-flex items-center gap-1 font-medium text-blue-600 hover:text-blue-700 hover:underline"
-            >
-              <RotateCcw size={12} /> Clear filters
-            </button>
-          )}
-        </div>
+          </span>
+        </label>
+        <FilterSelect
+          id={`${id}-sep`}
+          label="SEP"
+          value={filters.sep}
+          onChange={set("sep")}
+          options={SEP_OPTIONS}
+          any="Any SEP"
+        />
+        <FilterSelect
+          id={`${id}-asset`}
+          label="Receives (probed)"
+          value={filters.asset}
+          onChange={set("asset")}
+          options={choices.assets.map((a) => ({ value: a, label: a }))}
+          any={choices.assets.length ? "Any asset" : "No receive assets attested yet"}
+        />
+        <FilterSelect
+          id={`${id}-country`}
+          label="Country (declared)"
+          value={filters.country}
+          onChange={set("country")}
+          options={choices.countries.map((c) => ({ value: c, label: c }))}
+          any="Any country"
+        />
       </div>
 
-      {/* Results Grid */}
-      {filteredAnchors.length === 0 ? (
-        <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border bg-bg-subtle p-8 text-center text-secondary-text">
-          <p className="text-sm">No anchors match the selected filters.</p>
-          {hasActiveFilters && (
-            <button
-              type="button"
-              onClick={clearAllFilters}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card-bg px-3 py-1.5 text-xs font-medium text-primary-text hover:bg-border/30"
-            >
-              <RotateCcw size={13} /> Reset all filters
-            </button>
-          )}
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-secondary-text">
+        <p aria-live="polite">
+          Showing <span className="font-semibold tabular-nums text-primary-text">{shown.length}</span>{" "}
+          of <span className="tabular-nums">{anchors.length}</span> anchors
+        </p>
+        {active && (
+          <button
+            type="button"
+            onClick={() => update(EMPTY_FILTERS)}
+            className="inline-flex items-center gap-1 rounded font-medium text-blue-600 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-600/40"
+          >
+            <RotateCcw size={12} aria-hidden="true" /> Clear filters
+          </button>
+        )}
+      </div>
+
+      {shown.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-border bg-bg-subtle p-6 text-sm text-secondary-text">
+          No anchor on this network matches these filters.
         </div>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {filteredAnchors.map((a) => (
-            <AnchorCard key={a.domain} anchor={a} />
+          {shown.map((a) => (
+            <AnchorCard key={a.domain} anchor={a} network={network} />
           ))}
         </div>
       )}
     </div>
+  );
+}
+
+function FilterSelect({
+  id,
+  label,
+  value,
+  onChange,
+  options,
+  any,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: ReadonlyArray<{ value: string; label: string }>;
+  any: string;
+}) {
+  // A value from a link that no anchor here has is still shown, so the person sees why the
+  // list is empty instead of a select that silently says "any".
+  const listed = !value || options.some((o) => o.value === value);
+  return (
+    <label htmlFor={id} className="flex flex-col gap-1 text-xs font-medium text-secondary-text">
+      {label}
+      <select id={id} value={value} onChange={(e) => onChange(e.target.value)} className={control}>
+        <option value="">{any}</option>
+        {!listed && <option value={value}>{value}</option>}
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
