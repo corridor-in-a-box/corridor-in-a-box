@@ -50,6 +50,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 - Its ranking amount, `cautiousDestAmount`, is discounted by `estimateMarginBps`, 50 bps by
   default (RFC 0004 D3), so an indicative option ranks below a firm one at the same raw rate.
   `applyEstimateMargin()` and `DEFAULT_ESTIMATE_MARGIN_BPS` are exported alongside it.
+
 ### Added — onboarding exporter for the self-hosted reference anchor ([#640](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/640))
 
 - `referenceAnchorExporter` is the first real `OnboardingExporter` (#639). It maps the shared
