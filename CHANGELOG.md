@@ -50,6 +50,42 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 - Its ranking amount, `cautiousDestAmount`, is discounted by `estimateMarginBps`, 50 bps by
   default (RFC 0004 D3), so an indicative option ranks below a firm one at the same raw rate.
   `applyEstimateMargin()` and `DEFAULT_ESTIMATE_MARGIN_BPS` are exported alongside it.
+### Added — onboarding exporter for the self-hosted reference anchor ([#640](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/640))
+
+- `referenceAnchorExporter` is the first real `OnboardingExporter` (#639). It maps the shared
+  `BusinessProfile` onto the SEP-12 fields the SDF Anchor Platform reference server
+  (`scripts/reference-anchor.sh`) takes for a `sep31-sender`: the representative's SEP-9
+  natural-person fields, plus the business under the SEP-9 `organization.*` keys, with countries
+  encoded as ISO-3166-1 alpha-3.
+- `businessProfileFromCompanyProfile()` reads a v0 company profile (#637) into that
+  `BusinessProfile`, and `senderAccountFor()` picks the Stellar account to register under.
+  `registerReferenceAnchorSender()` submits the form through the SEP-31 adapter's
+  `registerCustomer`. Documents are never uploaded, only referenced by hash. The tests run
+  against `schemas/examples/company-profile.v0.json`.
+- `toAlpha3()` in `@corridor/probe` converts the alpha-2 codes its country table holds to
+  alpha-3.
+
+### Added — `corridor profile validate` ([#638](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/638))
+
+- `corridor profile validate <file.json> [--json]` checks a sending business's company profile
+  against the v0 JSON schema from #637 (`schemas/company-profile.v0.schema.json`), compiled with
+  ajv. The schema is bundled into the CLI, so the CLI and the schema are one source of truth.
+  Each problem is reported with its path and whether the field is missing, the wrong type or an
+  invalid value. Exit 0 when valid, 1 when not, 2 on bad usage.
+- The CLI exports a `CompanyProfile` type for the v0 profile, and its tests run against the
+  example profile in `schemas/examples/company-profile.v0.json`.
+
+### Added — resume-safe route pinning ([#625](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/625))
+
+- `PinnedRouteResolver` in `@corridor/router` resolves a run only to the receiving anchor
+  stored on it (`receivingDomain`, optional `routeProtocol`), so a resumed run never picks a
+  new anchor. With no stored route, or a stored route for another corridor, it refuses with
+  `UnpinnedRouteError`. On the public network, or whenever a registry is configured, it
+  applies the same `checkAttestation` gate as `RegistryRouteResolver`.
+- A pinned domain that differs from the passed corridor needs a `corridorFor` lookup that
+  returns that anchor's corridor. Without one the resolver refuses rather than rewriting
+  `home_domain` alone, which would attest one anchor while the adapter still called the
+  other's endpoints.
 
 ### Added — a custody statement ([#707](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/707))
 

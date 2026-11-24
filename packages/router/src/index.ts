@@ -227,3 +227,9 @@ export {
   fetchIndicativePrice,
 } from "./indicative-price";
 export type { IndicativePriceRequest, IndicativeRouteOption } from "./indicative-price";
+export { PinnedRouteResolver, UnpinnedRouteError } from "./pinned-resolver";
+export type {
+  PinnedRouteResolverOptions,
+  PinnedRunRecord,
+  PinnedRunStore,
+} from "./pinned-resolver";
