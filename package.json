@@ -38,6 +38,7 @@
     "serve": "tsx examples/run-service.ts",
     "verify:settle": "tsx examples/verify-settle-leg.ts",
     "verify:corridor": "tsx examples/verify-corridor.ts",
+    "load-test": "tsx examples/load-test.ts",
     "verify:quote-expiry": "tsx examples/verify-quote-expiry.ts",
     "verify:crash-resume": "tsx examples/verify-crash-resume.ts",
     "fund:testnet": "tsx examples/fund-testnet-sender.ts",

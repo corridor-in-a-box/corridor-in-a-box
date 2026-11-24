@@ -232,7 +232,7 @@
   },
   {
     "id": "ng-cowrie",
-    "status_note": "REAL — Cowrie Exchange (Lagos, Nigeria), confirmed 2026-10-17. No SEP-38, no payment attempted, no business relationship in place.",
+    "status_note": "REAL — Cowrie Exchange (Lagos, Nigeria), confirmed 2026-10-17. No SEP-38. Sandbox payment checked 2026-11-24: not possible — toml and SEP-10 are public-network only, no public sandbox found, no business relationship. No payment attempted.",
     "source": {
       "name": "USD Sending Anchor",
       "asset": "USDC",
@@ -351,7 +351,7 @@
   },
   {
     "id": "zeam",
-    "status_note": "REAL — Zeam (mint.zeam.money), probed 2026-10-17: SEP-10/12/31/38 all answer. No payment attempted, no business relationship in place.",
+    "status_note": "REAL — Zeam (mint.zeam.money), probed 2026-10-17: SEP-10/12/31/38 all answer. Testnet/sandbox payment checked 2026-11-24: not possible — toml and SEP-10 are public-network only; Zeam's sandbox is for its API Gateway and needs a business-portal account this repo does not have. No payment attempted.",
     "source": {
       "name": "USD Sending Anchor",
       "asset": "USDC",

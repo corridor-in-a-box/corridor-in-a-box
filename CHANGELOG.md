@@ -21,6 +21,30 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 - `anclap.com.ar` (#654): the domain does not exist in DNS (NXDOMAIN, no name servers).
 - Dated findings are in `contracts/anchors.json`; `tests/probe-anchor-findings.test.ts` checks the
   records and that the probe reports an unreachable SEP-31 host as a `sep31_info` failure.
+### Added — send app page scaffold with a permanent testnet banner ([#684](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/684))
+
+- New `/send` route in the web app (`web/app/send/layout.tsx`, `web/app/send/page.tsx`) with a
+  testnet banner (`web/components/send/TestnetBanner.tsx`) on every screen under it. The banner
+  has no close control. "Send" is in the top navigation, which now wraps instead of overflowing
+  at 375 px.
+
+### Added — load test: concurrent payments against the reference anchor ([#681](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/681))
+
+- `pnpm load-test` (`examples/load-test.ts`) sends up to 100 testnet payments at once through
+  the reference anchor and reports latency and failures. It fails on a duplicate settlement,
+  checked both in the engine's records and on the ledger through Horizon (one successful
+  transaction per payment memo). It refuses mainnet manifests.
+- `.github/workflows/load-test.yml` runs it on `workflow_dispatch` only and writes the report to
+  the job summary. New env vars `CONCURRENCY` and `SUMMARY_FILE` are in `.env.example`.
+
+### Changed — Zeam and Cowrie sandbox payment attempts recorded ([#682](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/682), [#683](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/683))
+
+- Checked 2026-11-24 whether a testnet or sandbox payment is possible through `zeam` and
+  `ng-cowrie`. It is not: both stellar.toml files declare only the public network, both SEP-10
+  endpoints issue public-network challenges, Cowrie has no public sandbox host, and Zeam's
+  sandbox serves its own API Gateway and needs a business-portal account this repo does not
+  have. No payment was attempted and no funds moved. The evidence is in
+  each manifest's header and `status_note`.
 
 ### Changed — the mainnet storage TTL entry criterion is recorded as met ([#698](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/698))
 
