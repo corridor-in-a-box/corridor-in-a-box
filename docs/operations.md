@@ -705,6 +705,17 @@ recorded again on resume. It shows up as a missing `version` in that payment's
 `listAudit()` output, so a gap in the versions means an audit write failed,
 not that a step was skipped.
 
+### Rate history retention and daily pruning
+
+The rate history tables (`rate_samples`, `rate_daily`, and `rate_pruning_state`) are created by `migrate()`.
+
+- **Retention window**: Configured via `RATE_RETENTION_DAYS` (default `90`). Rejects zero, negative, or non-numeric values with a clear error.
+- **Cadence**: Pruning executes once per day inside the collector loop (`RateCollectorLoop`). Execution is tracked in-memory (to avoid redundant DB queries on 15-minute ticks) and persisted in `rate_pruning_state` (to survive process restarts without double pruning).
+- **The summary guard**: Raw samples are **never** deleted if a corresponding daily summary for that UTC calendar day (`rate_daily.day = (sampled_at AT TIME ZONE 'UTC')::date`) has not been written. This invariant is enforced directly in the deletion query itself.
+- **Batching**: Old samples are deleted in bounded batches (default 1,000 rows, up to 100 batches per run) to avoid table lock contention.
+- **Daily summaries**: Summaries in `rate_daily` are permanent and never deleted.
+- **Observability**: A warning log (`corridor.rate_pruning.unsummarized_days_skipped`) is emitted whenever days older than the cutoff are skipped due to missing summaries.
+
 ## 5. Scaling notes (before multi-replica)
 
 - The service's **rate limiter and in-memory idempotency store are per-process**.

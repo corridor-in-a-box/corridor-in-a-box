@@ -226,6 +226,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   is the SEP-24 reference UI, whose business-server calls return 401 for the SEP-6 token.
   No `proof:` block was added, because no payout completed.
 
+### Added — Rate history retention and daily pruning ([#599](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/599))
+
+- Added rate history retention and batched daily pruning in `@corridor/engine` (`pruneRateSamples`, `createPruningCollectorStep`).
+- Added configurable retention period `RATE_RETENTION_DAYS` (default 90 days), rejecting invalid values (zero, negative, non-numeric).
+- Enforced strict summary guard in SQL query: raw samples are never deleted for any UTC day lacking a summary row in `rate_daily` matching pair, source, and network.
+- Pruning runs once per day inside the collector loop (`RateCollectorLoop`), with in-memory caching and durable `rate_pruning_state` tracking across restarts.
+
+
 ### Fixed — stale documentation and comments
 
 - Docs said no transition enters `refund_pending` and that `refunded` is reachable only when

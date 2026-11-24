@@ -126,3 +126,24 @@ export {
   ExternalQuoteProvider,
 } from "@corridor/adapter-kit";
 export { checkCompatibility } from "./compat";
+export {
+  DEFAULT_RETENTION_DAYS,
+  DEFAULT_PRUNE_BATCH_SIZE,
+  DEFAULT_MAX_PRUNE_BATCHES,
+  parseRetentionDays,
+  utcDayString,
+  calculateRetentionCutoff,
+  DELETE_PRUNABLE_SAMPLES_SQL,
+  SELECT_UNSUMMARIZED_DAYS_SQL,
+  SELECT_PRUNING_STATE_SQL,
+  UPSERT_PRUNING_STATE_SQL,
+  pruneRateSamples,
+  createPruningCollectorStep,
+  type RatePruningOptions,
+  type RatePruningResult,
+  type RatePruningStepOptions,
+  type CollectorStep,
+  type CollectorStepFn,
+  type CollectorStepResult,
+  type UnsummarizedDayRecord,
+} from "./rate-pruning";
