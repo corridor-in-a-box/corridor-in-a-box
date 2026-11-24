@@ -67,8 +67,7 @@ export function AttestedAnchorsSection({
 
   return (
     <div className="flex flex-col gap-4">
-      <div
-        role="search"
+      <search
         aria-label="Filter anchors"
         className="grid grid-cols-1 gap-3 rounded-xl border border-border bg-bg-subtle p-4 sm:grid-cols-2 lg:grid-cols-4"
       >
@@ -113,7 +112,7 @@ export function AttestedAnchorsSection({
           options={choices.countries.map((c) => ({ value: c, label: c }))}
           any="Any country"
         />
-      </div>
+      </search>
 
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-secondary-text">
         <p aria-live="polite">
