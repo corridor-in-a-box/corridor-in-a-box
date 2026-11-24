@@ -3,80 +3,83 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { decodeSeps, probeAnchor } from "@corridor/probe";
 
-describe("Anchor Probe Investigations (#654, #653, #651, #650)", () => {
-  const root = process.cwd();
-  const anchorsJsonPath = resolve(root, "contracts/anchors.json");
-  const anchorsData = JSON.parse(readFileSync(anchorsJsonPath, "utf8"));
-  const comments = (anchorsData.$comment as string[]).join("\n");
+// Probe findings for MyKobo (#650), BlindPay (#651), Coins.ph (#653) and
+// Anclap (#654). The records live in contracts/anchors.json; these tests keep
+// them from silently disappearing and pin the probe behaviour the MyKobo
+// finding depends on.
 
-  describe("Anclap (anclap.com.ar) probe investigation (#654)", () => {
-    it("documents why anclap.com.ar fails toml_fetch with dated DNS ENOTFOUND findings", () => {
-      expect(comments).toContain("anclap.com.ar");
-      expect(comments).toContain("2026-11-19");
-      expect(comments).toContain("ENOTFOUND");
-      expect(comments).toContain("no active DNS");
-      expect(comments).not.toContain("https://anclap.com.ar/fake");
-    });
+const anchors = JSON.parse(
+  readFileSync(resolve(process.cwd(), "contracts/anchors.json"), "utf8"),
+);
+const comments = (anchors.$comment as string[]).join("\n");
+
+function paragraphAbout(domain: string): string {
+  const para = comments
+    .split("\n\n")
+    .find((p) => p.startsWith(domain) || p.includes(` ${domain}.`));
+  expect(para, `no $comment paragraph for ${domain}`).toBeDefined();
+  return para as string;
+}
+
+describe("anchor probe findings (#650, #651, #653, #654)", () => {
+  it("keeps all four domains in the fleet", () => {
+    for (const d of ["mykobo.co", "blindpay.com", "coins.ph", "anclap.com.ar"]) {
+      expect(anchors.domains).toContain(d);
+    }
   });
 
-  describe("Coins.ph (coins.ph) probe investigation (#653)", () => {
-    it("documents why coins.ph fails toml_fetch with dated DNS ENOTFOUND findings", () => {
-      expect(comments).toContain("coins.ph");
-      expect(comments).toContain("2026-11-19");
-      expect(comments).toContain("ENOTFOUND");
-      expect(comments).toContain("domain does not resolve in DNS");
-    });
+  it("records a dated MyKobo finding naming the dead API host", () => {
+    const p = paragraphAbout("mykobo.co");
+    expect(p).toContain("2026-11-24");
+    expect(p).toContain("stellar.mykobo.co");
+    expect(p).toContain("NXDOMAIN");
+    expect(p).toContain("probe is correct");
   });
 
-  describe("BlindPay (blindpay.com) probe investigation (#651)", () => {
-    it("documents why blindpay.com fails toml_fetch with dated HTTP 403 findings", () => {
-      expect(comments).toContain("blindpay.com");
-      expect(comments).toContain("2026-11-19");
-      expect(comments).toContain("HTTP 403");
-      expect(comments).toContain("Cloudflare");
-    });
+  it("records a dated BlindPay finding with the HTTP status", () => {
+    const p = comments.split("\n\n").find((x) => x.startsWith("BlindPay appears"));
+    expect(p).toBeDefined();
+    expect(p).toContain("2026-11-24");
+    expect(p).toContain("HTTP 403");
   });
 
-  describe("MyKobo (mykobo.co) probe investigation (#650)", () => {
-    it("documents why mykobo.co advertises SEP-31 but fails sep31_info", () => {
-      expect(comments).toContain("mykobo.co");
-      expect(comments).toContain("2026-11-19");
-      expect(comments).toContain("DIRECT_PAYMENT_SERVER");
-      expect(comments).toContain("stellar.mykobo.co");
-      expect(comments).toContain("ENOTFOUND");
-      expect(comments).toContain("SEP-31 specification");
-    });
+  it("records a dated Coins.ph finding with the HTTP status", () => {
+    const p = paragraphAbout("coins.ph");
+    expect(p).toContain("2026-11-24");
+    expect(p).toContain("HTTP 404");
+  });
 
-    it("verifies probe behavior when TOML advertises SEP-31 but endpoint host is unreachable", async () => {
-      const mykoboToml = `
-VERSION="2.0.0"
-NETWORK_PASSPHRASE="Public Global Stellar Network ; September 2015"
-SIGNING_KEY="GAHNDAOJ7IB6KKMGKBGI5JWJHCTFXOVGY4U2N57C2CUZPK3SPEPCLU76"
-DIRECT_PAYMENT_SERVER="https://stellar.mykobo.co/sep31"
-`;
-      // Mock fetch: toml_fetch succeeds, but endpoint fetch throws ENOTFOUND
-      const mockFetch: typeof fetch = async (input, _init) => {
-        const url = String(input);
-        if (url.endsWith(".well-known/stellar.toml")) {
-          return new Response(mykoboToml, { status: 200 });
-        }
-        if (url.includes("stellar.mykobo.co")) {
-          const err = new TypeError("fetch failed");
-          (err as unknown as { cause: Error }).cause = new Error(
-            "getaddrinfo ENOTFOUND stellar.mykobo.co",
-          );
-          throw err;
-        }
-        return new Response("Not found", { status: 404 });
-      };
+  it("records a dated Anclap finding with the DNS failure", () => {
+    const p = paragraphAbout("anclap.com.ar");
+    expect(p).toContain("2026-11-24");
+    expect(p).toContain("NXDOMAIN");
+  });
 
-      const result = await probeAnchor("mykobo.co", { fetchImpl: mockFetch });
-      expect(decodeSeps(result.seps)).toContain(31); // Advertises SEP-31
+  it("reports an unreachable SEP-31 host as a sep31_info failure, not a toml failure", async () => {
+    const toml = [
+      'VERSION="2.0.0"',
+      'NETWORK_PASSPHRASE="Public Global Stellar Network ; September 2015"',
+      'SIGNING_KEY="GAHNDAOJ7IB6KKMGKBGI5JWJHCTFXOVGY4U2N57C2CUZPK3SPEPCLU76"',
+      'DIRECT_PAYMENT_SERVER="https://stellar.mykobo.co/sep31"',
+    ].join("\n");
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url === "https://mykobo.co/.well-known/stellar.toml") {
+        return new Response(toml, { status: 200 });
+      }
+      if (url.startsWith("https://stellar.mykobo.co/")) {
+        throw new TypeError("fetch failed", {
+          cause: new Error("getaddrinfo ENOTFOUND stellar.mykobo.co"),
+        });
+      }
+      return new Response("not found", { status: 404 });
+    };
 
-      const sep31Outcome = result.outcomes.find((o) => o.probe === "sep31_info");
-      expect(sep31Outcome).toBeDefined();
-      expect(sep31Outcome?.passed).toBe(false);
-      expect(sep31Outcome?.detail).toBe("fetch failed");
-    });
+    const result = await probeAnchor("mykobo.co", { fetchImpl });
+    expect(decodeSeps(result.seps)).toContain(31);
+    expect(result.outcomes.find((o) => o.probe === "toml_fetch")?.passed).toBe(true);
+    const sep31 = result.outcomes.find((o) => o.probe === "sep31_info");
+    expect(sep31?.passed).toBe(false);
+    expect(sep31?.detail).toBe("fetch failed");
   });
 });
