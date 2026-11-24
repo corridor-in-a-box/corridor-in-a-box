@@ -66,15 +66,15 @@ The `Registry` requires `attester: Address` in its constructor, while the `Attes
 
 ### Cost Model (Mainnet)
 
-- **Fleet Size**: 19 anchors in `contracts/anchors.json` (as of 2026-10-25; it grows as anchors are added).
+- **Fleet Size**: 24 anchors in `contracts/anchors.json` (as of 2026-11-20; it grows as anchors are added).
 - **Frequency**: 1 attestation per anchor per day.
 - **Per-Transaction Cost**: ~0.05 to 0.10 XLM (covering base fee, CPU/memory instructions, and persistent entry write footprint).
-- **Daily Spend**: ~1.0 to 1.9 XLM (19 attestations at the per-transaction cost).
-- **Monthly Run Rate**: ~30 to 60 XLM per month (plus periodic storage rent extensions).
+- **Daily Spend**: ~1.2 to 2.4 XLM (24 attestations at the per-transaction cost).
+- **Monthly Run Rate**: ~36 to 72 XLM per month (plus periodic storage rent extensions).
 
 ### Treasury & Operational Account
 
-- A dedicated attestation distribution account (`G...`) will be funded with **250 XLM** (roughly 4 to 8 months of operations at the rate above).
+- A dedicated attestation distribution account (`G...`) will be funded with **250 XLM** (roughly 3.5 to 7 months of operations at the rate above).
 - Automated alerting triggers when balance falls below **50 XLM**.
 - Funded and sponsored by the ecosystem operations grant.
 
@@ -120,14 +120,21 @@ Update `contracts/deployments.json`:
     "rpcUrl": "https://mainnet.sorobanrpc.com",
     "registry": "<REGISTRY_ID>",
     "attester": "<ATTESTER_ID>",
-    "deployedAt": "2026-10-XX"
+    "deployedAt": "2026-10-XX",
+    "upgrades": []
   }
 ```
+
+The file is validated against `contracts/deployments.schema.json` by `tests/deployments.test.ts`.
+A deployed contract needs a `deployedAt` date, and every `upgrade()` is appended to `upgrades`
+(oldest first) with the contract name, the new wasm hash, the transaction hash, the date and the
+ledger, as in the `testnet` entry.
 
 ### 4. Consumer Opt-In
 
 - `examples/read-registry.ts`: Reads `deployments.json` for `STELLAR_NETWORK=public`.
 - `RegistryRouteResolver` (`@corridor/router`): Connects to `deployments.json["public"].registry` for mainnet settlement validation.
+- Dashboard (`web/`): Reads both networks from `deployments.json`. Its Mainnet view shows "No registry on Mainnet yet" while `public.registry` is `null` and the mainnet attestations once it is set, with no code change.
 - Workflow execution: Mainnet scheduled attestation runs under a dedicated, permissions-restricted workflow dispatch or separate cron.
 
 ---

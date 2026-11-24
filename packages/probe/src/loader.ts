@@ -9,6 +9,7 @@ import {
   SEP_NUMBERS,
   PROBE_NAMES,
 } from "./index";
+import { parseReceiveLimits } from "./receive";
 
 const HEX_64_REGEX = /^[0-9a-fA-F]{64}$/;
 /** ISO-3166-1 alpha-2, as the registry stores it: two uppercase letters. */
@@ -173,6 +174,14 @@ export function parseProbeResults(input: unknown): ProbeResult[] {
       receiveAssets = rawAssets as string[];
     }
 
+    // The same list with its amount bounds. Absent from any result stored before
+    // the registry held limits, so it is optional as well, and checked to the
+    // contract's terms when it is there.
+    const receiveLimits =
+      item.receiveLimits === undefined
+        ? undefined
+        : parseReceiveLimits(item.receiveLimits, domain);
+
     if (item.country !== undefined && !ALPHA2_REGEX.test(String(item.country))) {
       throw new Error(
         `Probe result for ${domain} has an invalid country (expected ISO-3166-1 alpha-2, e.g. NG)`,
@@ -188,6 +197,7 @@ export function parseProbeResults(input: unknown): ProbeResult[] {
       tomlHash,
       outcomes,
       ...(receiveAssets ? { receiveAssets, sep31ReceiveAssets: receiveAssets } : {}),
+      ...(receiveLimits ? { receiveLimits } : {}),
       ...(country ? { country } : {}),
     };
   });
