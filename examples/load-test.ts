@@ -10,8 +10,8 @@
 //   REFERENCE_ANCHOR_URL=...      local reference server (default localhost:8080)
 //   HORIZON_URL=...               default https://horizon-testnet.stellar.org
 //   MANIFEST=...                  default corridors/reference.corridor.yaml
-//   CONCURRENCY=...               default 100
-//   AMOUNT=...                    default 0.10
+//   CONCURRENCY=...               default 100, must be 1-100
+//   AMOUNT=...                    default 0.10, a positive decimal
 //   GITHUB_STEP_SUMMARY=...       GitHub Actions step summary file path
 //   SUMMARY_FILE=...              alternative markdown summary output path
 //   SKIP_DOCTOR=1                 skip the preflight check
@@ -41,8 +41,20 @@ export interface PaymentAttemptResult {
   readonly state: string;
   readonly latencyMs: number;
   readonly stellarTxHash?: string;
+  /** The SEP-31 memo the payment settled under, as the run recorded it. */
+  readonly memo?: string;
   readonly error?: string;
 }
+
+/** One transaction from the signer's account, as Horizon reports it. */
+export interface OnChainTransaction {
+  readonly hash: string;
+  readonly memo?: string;
+  readonly createdAt: string;
+  readonly successful: boolean;
+}
+
+export const MAX_CONCURRENCY = 100;
 
 export interface LoadTestMetrics {
   readonly total: number;
@@ -91,6 +103,98 @@ export function detectDuplicateSettlements(results: readonly PaymentAttemptResul
     totalSettled: settledHashes.length,
     uniqueSettled: seen.size,
   };
+}
+
+/**
+ * Counts on-chain settlements per payment memo. A payment that settled twice
+ * shows up as two successful transactions from the signer carrying the same
+ * memo, even when the engine only remembers one of them. Memos that never show
+ * up on chain are reported separately: a completed payment with no on-chain
+ * transaction is worth a look, but memo encodings can differ, so it is not
+ * treated as a duplicate.
+ */
+export function detectOnChainDuplicates(
+  results: readonly PaymentAttemptResult[],
+  transactions: readonly OnChainTransaction[],
+): {
+  readonly checked: number;
+  readonly duplicateMemos: readonly string[];
+  readonly missingMemos: readonly string[];
+} {
+  const memos = new Set(results.filter((r) => r.ok && r.memo).map((r) => r.memo as string));
+  const counts = new Map<string, number>();
+  for (const tx of transactions) {
+    if (!tx.successful || tx.memo === undefined || !memos.has(tx.memo)) continue;
+    counts.set(tx.memo, (counts.get(tx.memo) ?? 0) + 1);
+  }
+  return {
+    checked: memos.size,
+    duplicateMemos: [...counts].filter(([, n]) => n > 1).map(([m]) => m),
+    missingMemos: [...memos].filter((m) => !counts.has(m)),
+  };
+}
+
+/**
+ * Reads the signer's transactions from Horizon, newest first, back to `since`.
+ * Bounded by `maxPages` so a busy account cannot keep the job paging forever.
+ */
+export async function fetchSignerTransactionsSince(
+  horizonUrl: string,
+  account: string,
+  since: Date,
+  fetchImpl: typeof fetch = fetch,
+  maxPages = 20,
+): Promise<readonly OnChainTransaction[]> {
+  const out: OnChainTransaction[] = [];
+  let url: string | undefined =
+    `${horizonUrl.replace(/\/+$/, "")}/accounts/${account}/transactions?order=desc&limit=200`;
+  for (let page = 0; url && page < maxPages; page++) {
+    const res = await fetchImpl(url);
+    if (!res.ok) throw new Error(`Horizon transactions HTTP ${res.status}`);
+    const body = (await res.json()) as {
+      _embedded?: {
+        records?: { hash: string; memo?: string; created_at: string; successful: boolean }[];
+      };
+      _links?: { next?: { href?: string } };
+    };
+    const records = body._embedded?.records ?? [];
+    let reachedOlder = false;
+    for (const r of records) {
+      if (new Date(r.created_at) < since) {
+        reachedOlder = true;
+        break;
+      }
+      out.push({
+        hash: r.hash,
+        memo: r.memo,
+        createdAt: r.created_at,
+        successful: r.successful,
+      });
+    }
+    if (reachedOlder || records.length === 0) break;
+    url = body._links?.next?.href;
+  }
+  return out;
+}
+
+/** Parses CONCURRENCY and AMOUNT, refusing anything outside the safe range. */
+export function parseLoadTestInputs(env: {
+  CONCURRENCY?: string;
+  AMOUNT?: string;
+}): { ok: true; concurrency: number; amount: string } | { ok: false; error: string } {
+  const rawConcurrency = (env.CONCURRENCY ?? "").trim() || "100";
+  if (!/^[0-9]+$/.test(rawConcurrency)) {
+    return { ok: false, error: `CONCURRENCY must be a whole number, got "${rawConcurrency}"` };
+  }
+  const concurrency = Number(rawConcurrency);
+  if (concurrency < 1 || concurrency > MAX_CONCURRENCY) {
+    return { ok: false, error: `CONCURRENCY must be between 1 and ${MAX_CONCURRENCY}` };
+  }
+  const amount = (env.AMOUNT ?? "").trim() || "0.10";
+  if (!/^[0-9]+(\.[0-9]{1,7})?$/.test(amount) || Number(amount) <= 0) {
+    return { ok: false, error: `AMOUNT must be a positive decimal, got "${amount}"` };
+  }
+  return { ok: true, concurrency, amount };
 }
 
 export function computePercentile(sorted: readonly number[], p: number): number {
@@ -240,7 +344,9 @@ export async function runConcurrentPayments(
   store: {
     get: (
       key: string,
-    ) => Promise<{ state: string; stellarTxHash?: string; lastError?: string } | undefined>;
+    ) => Promise<
+      { state: string; stellarTxHash?: string; memo?: string; lastError?: string } | undefined
+    >;
   },
   options: {
     concurrency: number;
@@ -290,6 +396,7 @@ export async function runConcurrentPayments(
           state: result.value.state,
           latencyMs,
           stellarTxHash: stored?.stellarTxHash,
+          memo: stored?.memo,
         };
       }
 
@@ -346,8 +453,12 @@ export async function main(): Promise<void> {
     "",
   );
   const horizonUrl = process.env.HORIZON_URL ?? "https://horizon-testnet.stellar.org";
-  const concurrency = parseInt(process.env.CONCURRENCY ?? "100", 10);
-  const amount = process.env.AMOUNT ?? "0.10";
+  const inputs = parseLoadTestInputs(process.env);
+  if (!inputs.ok) {
+    console.error(`✗ ${inputs.error}`);
+    process.exit(EXIT_REFUSED);
+  }
+  const { concurrency, amount } = inputs;
 
   const corridor = pinToReferenceAnchor(loaded.value, anchorUrl);
 
@@ -405,6 +516,8 @@ export async function main(): Promise<void> {
     process.exit(EXIT_NOT_COMPLETED);
   }
 
+  // Horizon timestamps are whole seconds; start the on-chain window a little early.
+  const windowStart = new Date(Date.now() - 5_000);
   const startTime = Date.now();
   const results = await runConcurrentPayments(corridor, deps, store, {
     concurrency,
@@ -422,13 +535,38 @@ export async function main(): Promise<void> {
     anchorUrl,
   });
 
-  console.log(report);
+  // Acceptance criteria: no duplicate settlements, checked against the ledger,
+  // not only against what the engine remembers.
+  let onChain: ReturnType<typeof detectOnChainDuplicates> | undefined;
+  let onChainError: string | undefined;
+  try {
+    const txs = await fetchSignerTransactionsSince(horizonUrl, signer.publicKey, windowStart);
+    onChain = detectOnChainDuplicates(results, txs);
+  } catch (err) {
+    onChainError = err instanceof Error ? err.message : String(err);
+  }
+
+  const onChainSection = [
+    "### On-chain duplicate check (Horizon)",
+    "",
+    onChain
+      ? [
+          `- Payment memos checked: ${onChain.checked}`,
+          `- Memos settled more than once: ${onChain.duplicateMemos.length}${onChain.duplicateMemos.length ? ` (${onChain.duplicateMemos.join(", ")})` : ""}`,
+          `- Memos with no on-chain transaction found: ${onChain.missingMemos.length}`,
+        ].join("\n")
+      : `- Could not read the signer's transactions from Horizon: ${onChainError}`,
+    "",
+  ].join("\n");
+  const fullReport = `${report}\n${onChainSection}`;
+
+  console.log(fullReport);
 
   // Write to GitHub Step Summary if present
   const summaryPath = process.env.GITHUB_STEP_SUMMARY ?? process.env.SUMMARY_FILE;
   if (summaryPath) {
     try {
-      appendFileSync(summaryPath, report + "\n", "utf8");
+      appendFileSync(summaryPath, fullReport + "\n", "utf8");
       console.log(`\n✓ Written report to step summary: ${summaryPath}`);
     } catch (err) {
       console.warn(`Warning: Could not write step summary to ${summaryPath}: ${String(err)}`);
@@ -444,13 +582,24 @@ export async function main(): Promise<void> {
     process.exit(EXIT_NOT_COMPLETED);
   }
 
+  if (!onChain) {
+    console.error(`\n❌ on-chain duplicate check could not run: ${onChainError}`);
+    process.exit(EXIT_NOT_COMPLETED);
+  }
+  if (onChain.duplicateMemos.length > 0) {
+    console.error(
+      `\n❌ DUPLICATE ON-CHAIN SETTLEMENTS for memo(s): ${onChain.duplicateMemos.join(", ")}`,
+    );
+    process.exit(EXIT_NOT_COMPLETED);
+  }
+
   if (metrics.failed > 0) {
     console.error(`\n⚠️ Load test finished with ${metrics.failed} failure(s).`);
     process.exit(EXIT_NOT_COMPLETED);
   }
 
   console.log(
-    `\n✓ Load test passed: 100% of ${metrics.total} concurrent payments settled with zero duplicates.`,
+    `\n✓ Load test passed: all ${metrics.total} concurrent payments settled with zero duplicates.`,
   );
 }
 

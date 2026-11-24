@@ -7,29 +7,31 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
-### Added — send app page scaffold with permanent testnet banner ([#684](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/684))
+### Added — send app page scaffold with a permanent testnet banner ([#684](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/684))
 
-- Reference send app route `/send` in the web application (`web/app/send/layout.tsx` and
-  `web/app/send/page.tsx`) with a permanent, non-dismissible testnet banner (`web/components/send/TestnetBanner.tsx`)
-  asserting that the application exercises `@corridor/service` on Stellar Testnet and that no
-  real money is moved. Responsive down to 375px width without horizontal scroll, linked from top
-  navigation (`web/components/layout/Navbar.tsx`), with unit tests in `tests/web-send-scaffold.test.ts`.
+- New `/send` route in the web app (`web/app/send/layout.tsx`, `web/app/send/page.tsx`) with a
+  testnet banner (`web/components/send/TestnetBanner.tsx`) on every screen under it. The banner
+  has no close control. "Send" is in the top navigation, which now wraps instead of overflowing
+  at 375 px.
 
-### Added — concurrent load test against reference anchor ([#681](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/681))
+### Added — load test: concurrent payments against the reference anchor ([#681](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/681))
 
-- Manual load testing runner `examples/load-test.ts` (`pnpm load-test`) sending 100 concurrent
-  payments against the reference anchor stack, measuring min/max/average/percentile latencies,
-  asserting zero duplicate settlements, and writing a formatted summary report to `$GITHUB_STEP_SUMMARY`.
-- Workflow `.github/workflows/load-test.yml` configured strictly for manual execution
-  (`workflow_dispatch` only; never scheduled) using a funded testnet distribution account.
-  Documented in `docs/operations.md` and validated in `tests/load-test.test.ts`.
+- `pnpm load-test` (`examples/load-test.ts`) sends up to 100 testnet payments at once through
+  the reference anchor and reports latency and failures. It fails on a duplicate settlement,
+  checked both in the engine's records and on the ledger through Horizon (one successful
+  transaction per payment memo). It refuses mainnet manifests.
+- `.github/workflows/load-test.yml` runs it on `workflow_dispatch` only and writes the report to
+  the job summary. New env vars `CONCURRENCY` and `SUMMARY_FILE` are in `.env.example`.
 
-### Changed — Cowrie & Zeam sandbox payment outcome documented ([#683](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/683), [#682](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/682))
+### Changed — Zeam and Cowrie sandbox payment attempts recorded ([#682](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/682), [#683](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/683))
 
-- Evaluated sandbox payment feasibility for Cowrie (`corridors/ng-cowrie.corridor.yaml`) and Zeam
-  (`corridors/zeam.corridor.yaml`): both anchors operate on public network and require institutional
-  onboarding / bilateral partner agreements before sandbox access or payment execution is granted.
-  Documented outcomes in respective corridor status notes and regenerated corridor catalog and web data.
+- Checked 2026-11-24 whether a testnet or sandbox payment is possible through `zeam` and
+  `ng-cowrie`. It is not: both stellar.toml files declare only the public network, both SEP-10
+  endpoints issue public-network challenges, Cowrie has no public sandbox host, and Zeam's
+  sandbox serves its own API Gateway and needs a business-portal account this repo does not
+  have. No payment was attempted and no funds moved. The evidence is in
+  each manifest's header and `status_note`.
+
 ### Changed — the mainnet storage TTL entry criterion is recorded as met ([#698](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/698))
 
 - `docs/mainnet-registry.md` §1 criterion 1 now says so with evidence instead of leaving the

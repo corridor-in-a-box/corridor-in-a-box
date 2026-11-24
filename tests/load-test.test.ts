@@ -5,7 +5,12 @@ import {
   computeMetrics,
   computePercentile,
   detectDuplicateSettlements,
+  detectOnChainDuplicates,
+  fetchSignerTransactionsSince,
   formatMarkdownReport,
+  MAX_CONCURRENCY,
+  parseLoadTestInputs,
+  type OnChainTransaction,
   type PaymentAttemptResult,
 } from "../examples/load-test";
 
@@ -154,5 +159,94 @@ describe("Load test metrics & duplicate settlement detection (#681)", () => {
     const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
 
     expect(pkg.scripts["load-test"]).toBe("tsx examples/load-test.ts");
+  });
+});
+
+describe("load test inputs and on-chain duplicate check (#681)", () => {
+  it("accepts the defaults and refuses out-of-range or malformed inputs", () => {
+    expect(parseLoadTestInputs({})).toEqual({ ok: true, concurrency: 100, amount: "0.10" });
+    expect(parseLoadTestInputs({ CONCURRENCY: "5", AMOUNT: "1.5" })).toEqual({
+      ok: true,
+      concurrency: 5,
+      amount: "1.5",
+    });
+    expect(parseLoadTestInputs({ CONCURRENCY: "0" }).ok).toBe(false);
+    expect(parseLoadTestInputs({ CONCURRENCY: String(MAX_CONCURRENCY + 1) }).ok).toBe(false);
+    expect(parseLoadTestInputs({ CONCURRENCY: "10; rm -rf /" }).ok).toBe(false);
+    expect(parseLoadTestInputs({ AMOUNT: "0" }).ok).toBe(false);
+    expect(parseLoadTestInputs({ AMOUNT: "-1" }).ok).toBe(false);
+    expect(parseLoadTestInputs({ AMOUNT: "abc" }).ok).toBe(false);
+  });
+
+  const settled = (i: number, memo: string): PaymentAttemptResult => ({
+    index: i,
+    idempotencyKey: `k-${i}`,
+    ok: true,
+    state: "completed",
+    latencyMs: 100,
+    stellarTxHash: `h-${i}`,
+    memo,
+  });
+
+  it("flags a memo that settled twice on chain even when the engine saw one hash", () => {
+    const results = [settled(1, "m1"), settled(2, "m2")];
+    const txs: OnChainTransaction[] = [
+      { hash: "h-1", memo: "m1", createdAt: "2026-11-24T10:00:00Z", successful: true },
+      { hash: "h-2", memo: "m2", createdAt: "2026-11-24T10:00:01Z", successful: true },
+      { hash: "h-3", memo: "m2", createdAt: "2026-11-24T10:00:02Z", successful: true },
+      // Unrelated traffic and failed submissions are ignored.
+      { hash: "h-4", memo: "other", createdAt: "2026-11-24T10:00:03Z", successful: true },
+      { hash: "h-5", memo: "m1", createdAt: "2026-11-24T10:00:04Z", successful: false },
+    ];
+    const out = detectOnChainDuplicates(results, txs);
+    expect(out.checked).toBe(2);
+    expect(out.duplicateMemos).toEqual(["m2"]);
+    expect(out.missingMemos).toEqual([]);
+  });
+
+  it("reports memos with no on-chain transaction without calling them duplicates", () => {
+    const out = detectOnChainDuplicates(
+      [settled(1, "m1"), settled(2, "m2")],
+      [{ hash: "h-1", memo: "m1", createdAt: "2026-11-24T10:00:00Z", successful: true }],
+    );
+    expect(out.duplicateMemos).toEqual([]);
+    expect(out.missingMemos).toEqual(["m2"]);
+  });
+
+  it("pages Horizon back to the start of the run and stops there", async () => {
+    const pages: Record<string, unknown> = {
+      "https://horizon.test/accounts/GABC/transactions?order=desc&limit=200": {
+        _embedded: {
+          records: [
+            { hash: "a", memo: "m1", created_at: "2026-11-24T10:00:05Z", successful: true },
+          ],
+        },
+        _links: { next: { href: "https://horizon.test/page2" } },
+      },
+      "https://horizon.test/page2": {
+        _embedded: {
+          records: [
+            { hash: "b", memo: "m2", created_at: "2026-11-24T10:00:01Z", successful: true },
+            { hash: "c", memo: "old", created_at: "2026-11-24T09:00:00Z", successful: true },
+          ],
+        },
+        _links: { next: { href: "https://horizon.test/page3" } },
+      },
+    };
+    const seen: string[] = [];
+    const fakeFetch = (async (url: string) => {
+      seen.push(url);
+      const body = pages[url];
+      return { ok: body !== undefined, status: body ? 200 : 404, json: async () => body };
+    }) as unknown as typeof fetch;
+
+    const txs = await fetchSignerTransactionsSince(
+      "https://horizon.test/",
+      "GABC",
+      new Date("2026-11-24T10:00:00Z"),
+      fakeFetch,
+    );
+    expect(txs.map((t) => t.hash)).toEqual(["a", "b"]);
+    expect(seen).toHaveLength(2);
   });
 });

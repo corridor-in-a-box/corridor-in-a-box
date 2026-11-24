@@ -1,99 +1,77 @@
 import Link from "next/link";
-import { ArrowRight, FileText, Send, ShieldCheck, Zap } from "lucide-react";
 
 export const metadata = {
-  title: "Send Payment — corridor-in-a-box",
+  title: "Send — corridor-in-a-box",
   description:
-    "Reference Send Application: testnet-only sender interface to plan corridors, evaluate ranked quotes, specify recipient details, and watch payments settle.",
+    "Testnet reference send app: plan a payment, pick a route, enter the recipient's details and watch it arrive. Test tokens only.",
 };
+
+// The steps of the send app (RFC 0004 §6). Each one is built in its own issue;
+// this page is the scaffold they plug into.
+const steps = [
+  {
+    title: "Amount and destination",
+    body: "Choose how much to send and the country and currency it should arrive in.",
+  },
+  {
+    title: "Pick a route",
+    body: "Compare the routes the router finds. Each price is labelled locked, indicative or estimated, with the reason it was ranked where it is.",
+  },
+  {
+    title: "Recipient details",
+    body: "Fill in exactly the fields the receiving anchor asks for, nothing more.",
+  },
+  {
+    title: "Send and watch it arrive",
+    body: "Send the testnet payment and follow it until the anchor reports it complete.",
+  },
+];
 
 export default function SendPage() {
   return (
     <div className="flex flex-col gap-8">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight text-primary-text">Send Payment</h1>
-        <p className="mt-2 text-sm text-secondary-text">
-          Reference send application (RFC 0004 §6). Exercise <code>@corridor/service</code> to plan
-          routes, evaluate ranked quotes, collect destination fields, and verify end-to-end
-          settlement on Stellar Testnet.
+      <header>
+        <h1 className="text-3xl font-bold tracking-tight text-balance">Send a testnet payment</h1>
+        <p className="mt-2 max-w-prose text-secondary-text">
+          A small reference app on <code>@corridor/service</code>. It walks one payment from
+          plan to arrival on the Stellar test network. The steps below are being built; until
+          they land, use the payment runner to drive the engine.
         </p>
-      </div>
+      </header>
 
-      <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
-        <div className="rounded-xl border border-border bg-card p-6 shadow-sm">
-          <div className="flex items-center gap-3">
-            <div className="rounded-lg bg-blue-500/10 p-2 text-blue-600 dark:text-blue-400">
-              <Zap size={20} />
-            </div>
-            <h2 className="text-lg font-semibold text-primary-text">Plan & Quote</h2>
-          </div>
-          <p className="mt-3 text-sm text-secondary-text">
-            Compare live corridors against Anchor Platform endpoints. Filter routes by latency, fee,
-            and price stability (locked, indicative, or estimated).
-          </p>
-        </div>
-
-        <div className="rounded-xl border border-border bg-card p-6 shadow-sm">
-          <div className="flex items-center gap-3">
-            <div className="rounded-lg bg-emerald-500/10 p-2 text-emerald-600 dark:text-emerald-400">
-              <ShieldCheck size={20} />
-            </div>
-            <h2 className="text-lg font-semibold text-primary-text">Comply & Register</h2>
-          </div>
-          <p className="mt-3 text-sm text-secondary-text">
-            SEP-12 customer registration and KYC field collection dynamically driven by anchor
-            specifications without client-side hardcoding.
-          </p>
-        </div>
-
-        <div className="rounded-xl border border-border bg-card p-6 shadow-sm">
-          <div className="flex items-center gap-3">
-            <div className="rounded-lg bg-purple-500/10 p-2 text-purple-600 dark:text-purple-400">
-              <Send size={20} />
-            </div>
-            <h2 className="text-lg font-semibold text-primary-text">Settle on Testnet</h2>
-          </div>
-          <p className="mt-3 text-sm text-secondary-text">
-            Execute payment transactions with cryptographic signing, automatic sequence locking,
-            and live Horizon confirmation.
-          </p>
-        </div>
-
-        <div className="rounded-xl border border-border bg-card p-6 shadow-sm">
-          <div className="flex items-center gap-3">
-            <div className="rounded-lg bg-amber-500/10 p-2 text-amber-600 dark:text-amber-400">
-              <FileText size={20} />
-            </div>
-            <h2 className="text-lg font-semibold text-primary-text">Reconcile & Audit</h2>
-          </div>
-          <p className="mt-3 text-sm text-secondary-text">
-            Track transaction statuses through SEP-31 polling and observe the immutable transition
-            audit log from quotation to completion.
-          </p>
-        </div>
-      </div>
-
-      <div className="rounded-xl border border-border bg-card p-6 shadow-sm">
-        <h3 className="text-base font-semibold text-primary-text">Getting Started</h3>
-        <p className="mt-2 text-sm text-secondary-text">
-          Use the navigation links or the payments runner to initiate testnet transfers against
-          the reference anchor or explore configured corridors.
-        </p>
-        <div className="mt-4 flex flex-wrap gap-3">
-          <Link
-            href="/payments"
-            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
+      <ol className="flex flex-col gap-3">
+        {steps.map((s, i) => (
+          <li
+            key={s.title}
+            className="flex gap-4 rounded-lg border border-border bg-bg-subtle px-4 py-3"
           >
-            Open Payment Runner
-            <ArrowRight size={16} />
-          </Link>
-          <Link
-            href="/docs"
-            className="inline-flex items-center gap-2 rounded-lg border border-border bg-transparent px-4 py-2 text-sm font-medium text-primary-text transition-colors hover:bg-bg-subtle"
-          >
-            Read Documentation
-          </Link>
-        </div>
+            <span
+              aria-hidden
+              className="mt-0.5 text-sm font-semibold tabular-nums text-secondary-text"
+            >
+              {i + 1}
+            </span>
+            <div className="min-w-0">
+              <h2 className="font-medium">{s.title}</h2>
+              <p className="mt-0.5 text-sm text-secondary-text">{s.body}</p>
+            </div>
+          </li>
+        ))}
+      </ol>
+
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
+        <Link
+          href="/payments"
+          className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:opacity-90 active:translate-y-px"
+        >
+          Open the payment runner
+        </Link>
+        <Link
+          href="/docs"
+          className="text-sm font-medium text-secondary-text underline-offset-4 transition-colors hover:text-primary-text hover:underline"
+        >
+          Read the docs
+        </Link>
       </div>
     </div>
   );

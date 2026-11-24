@@ -296,7 +296,7 @@ XLM; this one settles the asset the anchor actually quotes.
 `QUOTE_UNAVAILABLE: quote HTTP 502`. `AMOUNT=1.00` reproduces it; the default of
 `10.00` does not.
 
-### `pnpm load-test` — 100 concurrent payments against the reference anchor
+### `pnpm load-test` — concurrent payments against the reference anchor
 
 ```bash
 scripts/reference-anchor.sh up
@@ -304,20 +304,27 @@ scripts/reference-anchor.sh payout-watch &
 CORRIDOR_SIGNER_SECRET=S… pnpm load-test
 ```
 
-Sends 100 testnet payments concurrently (`Promise.all`) through the complete corridor
-lifecycle (SEP-12 customer identification, SEP-38 quotation, SEP-31 transfer creation,
-Stellar settlement under the per-signer sequence lock, and status reconciliation).
+Sends `CONCURRENCY` (default 100, at most 100) testnet payments of `AMOUNT`
+(default `0.10`) at once through the full corridor lifecycle: SEP-12 customers,
+SEP-38 quote, SEP-31 transaction, Stellar settlement under the per-signer
+sequence lock, and reconciliation. It refuses a `network: public` manifest.
 
-Validates:
+It reports success and failure counts, latency (min, average, p50/p90/p95/p99,
+max) and a failure breakdown, and checks for duplicate settlements twice:
 
-- **Zero duplicate settlements**: asserts that all settled transactions yield unique on-chain
-  hashes with no double-spending.
-- **Latency profiling**: records min, max, average, and p50/p90/p95/p99 execution durations.
-- **Job summary output**: generates a formatted Markdown report automatically appended to
-  `$GITHUB_STEP_SUMMARY` in CI or output to stdout.
+- in the engine's own records: no two payments share a settlement hash;
+- on the ledger: it reads the signer's transactions from Horizon for the run's
+  window and fails if any payment memo was settled by more than one successful
+  transaction.
 
-The manual workflow `.github/workflows/load-test.yml` executes this test on demand
-(`workflow_dispatch` only; never scheduled) using a dedicated testnet distribution account.
+The report goes to stdout and is appended to `$GITHUB_STEP_SUMMARY` (or
+`SUMMARY_FILE` outside Actions). The run exits non-zero on any failure or
+duplicate.
+
+`.github/workflows/load-test.yml` runs it on demand only (`workflow_dispatch`,
+never scheduled or on pull requests), with the same repository secrets as the
+reference corridor job: `CORRIDOR_SIGNER_SECRET` (a funded testnet account used
+only for this) and `REFERENCE_DISTRIBUTION_SECRET`.
 
 ### `corridor canary --write` — recording the proof it earns
 

@@ -2,51 +2,39 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-describe("Send App Scaffold & Permanent Testnet Banner (RFC 0004 §6, #684)", () => {
-  const root = process.cwd();
+// Source-level checks for the /send scaffold (RFC 0004 §6, #684). The web app
+// has no component test runner; `pnpm --filter web build` covers rendering.
+const read = (p: string) => readFileSync(resolve(process.cwd(), p), "utf8");
 
-  it("provides a permanent TestnetBanner component with non-dismissible testnet notice", () => {
-    const bannerPath = resolve(root, "web/components/send/TestnetBanner.tsx");
-    const bannerSource = readFileSync(bannerPath, "utf8");
-
-    // Must explicitly declare testnet notice and no real money
-    expect(bannerSource).toContain("Testnet only — no real money");
-    expect(bannerSource).toContain("@corridor/service");
-    expect(bannerSource).toContain("No real fiat or cryptocurrency is transferred");
-
-    // Accessibility attributes
-    expect(bannerSource).toContain('role="alert"');
-    expect(bannerSource).toContain('aria-label="Testnet Notice"');
-
-    // Permanent: banner cannot be dismissed, closed, or hidden
-    expect(bannerSource).not.toMatch(/onDismiss|onClose|onClick|<button/i);
+describe("send app scaffold and permanent testnet banner (#684)", () => {
+  it("the banner says testnet and no real money, and has no way to dismiss it", () => {
+    const banner = read("web/components/send/TestnetBanner.tsx");
+    expect(banner).toContain("Testnet only. No real money.");
+    expect(banner).toContain('role="note"');
+    // Permanent: no client state, no handlers, no close control.
+    expect(banner).not.toMatch(/"use client"|useState|onDismiss|onClose|onClick|<button/);
   });
 
-  it("wraps /send routes in a layout that renders the permanent testnet banner on every screen", () => {
-    const layoutPath = resolve(root, "web/app/send/layout.tsx");
-    const layoutSource = readFileSync(layoutPath, "utf8");
-
-    expect(layoutSource).toContain("TestnetBanner");
-    expect(layoutSource).toContain("<TestnetBanner />");
-    expect(layoutSource).toContain("{children}");
-    // Layout constraints to avoid horizontal scrolling at 375px
-    expect(layoutSource).toContain("overflow-x-hidden");
-    expect(layoutSource).toContain("max-w-4xl");
-    expect(layoutSource).toContain("px-4");
+  it("every /send screen renders through a layout that always shows the banner", () => {
+    const layout = read("web/app/send/layout.tsx");
+    expect(layout).toContain("<TestnetBanner />");
+    expect(layout).toContain("{children}");
+    // The banner must not sit behind a condition.
+    expect(layout).not.toMatch(/\{[^}]*&&\s*<TestnetBanner/);
+    // The root layout already renders <main>; a second one is invalid.
+    expect(layout).not.toContain("<main");
+    expect(read("web/app/layout.tsx")).toContain("<main");
   });
 
-  it("provides a /send page scaffold with responsive layout", () => {
-    const pagePath = resolve(root, "web/app/send/page.tsx");
-    const pageSource = readFileSync(pagePath, "utf8");
-
-    expect(pageSource).toContain("Send Payment");
-    expect(pageSource).toContain("RFC 0004");
+  it("the /send page exists and the navbar links to it", () => {
+    expect(read("web/app/send/page.tsx")).toContain("Send a testnet payment");
+    expect(read("web/components/layout/Navbar.tsx")).toContain(
+      '{ href: "/send", label: "Send" }',
+    );
   });
 
-  it("links to /send from the global Navbar", () => {
-    const navbarPath = resolve(root, "web/components/layout/Navbar.tsx");
-    const navbarSource = readFileSync(navbarPath, "utf8");
-
-    expect(navbarSource).toContain('{ href: "/send", label: "Send" }');
+  it("the navbar wraps instead of overflowing at narrow widths", () => {
+    const navbar = read("web/components/layout/Navbar.tsx");
+    expect(navbar).toMatch(/<nav aria-label="Main" className="[^"]*flex-wrap/);
   });
 });

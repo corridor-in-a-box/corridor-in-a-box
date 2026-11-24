@@ -1,29 +1,26 @@
-import { ShieldAlert } from "lucide-react";
+import { TriangleAlert } from "lucide-react";
 
 /**
- * Permanent, non-dismissible testnet banner for the reference send application
- * (RFC 0004 §6, Issue #684).
+ * Permanent testnet notice for the send app (RFC 0004 §6, issue #684).
  *
- * Renders on every screen under `/send` to ensure senders are permanently
- * aware that the application operates strictly on Stellar Testnet with no
- * real funds.
+ * Rendered by `web/app/send/layout.tsx`, so it is on every screen under
+ * `/send`. It has no close control and no client state: there is nothing a
+ * user can do to hide it.
  */
 export function TestnetBanner() {
   return (
     <aside
-      role="alert"
-      aria-label="Testnet Notice"
-      className="flex w-full items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-900 shadow-sm dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300 sm:items-center"
+      role="note"
+      aria-label="Testnet notice"
+      className="flex w-full items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-amber-950 dark:border-amber-800/60 dark:bg-amber-950/40 dark:text-amber-100"
     >
-      <ShieldAlert size={20} className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-400 sm:mt-0" />
-      <div className="min-w-0 flex-1 text-xs sm:text-sm">
-        <p className="font-semibold text-amber-950 dark:text-amber-200">
-          Testnet only — no real money
-        </p>
-        <p className="mt-0.5 text-amber-800 dark:text-amber-300/90">
-          This reference send application exercises <code>@corridor/service</code> on the Stellar
-          Testnet. No real fiat or cryptocurrency is transferred. All transactions settle using
-          testnet accounts and test tokens.
+      <TriangleAlert size={18} aria-hidden className="mt-0.5 shrink-0 text-amber-700 dark:text-amber-400" />
+      <div className="min-w-0 text-sm leading-relaxed">
+        <p className="font-semibold">Testnet only. No real money.</p>
+        <p className="mt-0.5 text-amber-900 dark:text-amber-200/90">
+          This app sends payments on the Stellar test network through{" "}
+          <code className="break-all">@corridor/service</code>. Every balance and payment here
+          uses test tokens with no value.
         </p>
       </div>
     </aside>
