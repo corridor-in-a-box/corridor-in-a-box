@@ -29,6 +29,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 - The attested-anchor list on each network can be filtered by SEP (advertised, or SEP-31
   probed and working), probed receive asset, declared country and domain. The filters live in
   the URL beside `?network=`, so a filtered view can be linked to.
+
 ### Added — send app page scaffold with a permanent testnet banner ([#684](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/684))
 
 - New `/send` route in the web app (`web/app/send/layout.tsx`, `web/app/send/page.tsx`) with a
