@@ -24,6 +24,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   ImpalaPay (`impalapay.com`) and Yellow Card (`yellowcard.io`). Each was probed on 2026-11-25;
   only Finclusive's toml loads, and its API host's TLS certificate has expired. The selection
   method, the probe results and the entries left out are recorded in `contracts/anchors.json`.
+
 ### Added — live testnet failure scenarios against the reference anchor ([#673](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/673), [#674](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/674), [#675](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/675), [#676](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/676))
 
 - `.github/workflows/reference-live-scenarios.yml` runs, daily and on demand,
