@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import {
   MAX_BODY_BYTES,
   SEND_PROXY_ENV,
+  clientOf,
+  createRateLimiter,
   proxyCreatePayment,
   proxyGetPayment,
   sendProxyConfigFromEnv,
@@ -22,6 +24,7 @@ function stub(status: number, body: string): { config: SendProxyConfig; calls: C
   const config: SendProxyConfig = {
     serviceUrl: "http://service.internal:8080/",
     apiKey: KEY,
+    allowedCorridors: ["reference-testnet"],
     fetch: (async (url: string, init: RequestInit) => {
       calls.push({ url, init });
       return new Response(body, { status });
@@ -41,9 +44,18 @@ describe("configuration", () => {
       sendProxyConfigFromEnv({
         SEND_APP_SERVICE_URL: "http://svc",
         SEND_APP_SERVICE_API_KEY: "k",
+        SEND_APP_CORRIDORS: "reference-testnet, other-testnet,",
         CORRIDOR_SERVICE_API_KEY: "other",
       }),
-    ).toEqual({ serviceUrl: "http://svc", apiKey: "k" });
+    ).toEqual({
+      serviceUrl: "http://svc",
+      apiKey: "k",
+      allowedCorridors: ["reference-testnet", "other-testnet"],
+    });
+  });
+
+  it("lists no corridors when the variable is unset", () => {
+    expect(sendProxyConfigFromEnv({}).allowedCorridors).toEqual([]);
   });
 
   it("answers 503 on both routes while no service is configured", async () => {
@@ -52,6 +64,84 @@ describe("configuration", () => {
       body: { error: "send_unavailable" },
     });
     expect((await proxyGetPayment({}, "run-0001")).status).toBe(503);
+  });
+});
+
+describe("an ungated request is refused", () => {
+  it("fails closed when no corridors are listed, and never calls the service", async () => {
+    for (const allowedCorridors of [undefined, []]) {
+      const { config, calls } = stub(200, "{}");
+      const open = { ...config, allowedCorridors };
+      expect(await proxyCreatePayment(open, payment)).toEqual({
+        status: 503,
+        body: { error: "send_unavailable" },
+      });
+      expect((await proxyGetPayment(open, "run-0001")).status).toBe(503);
+      expect(calls).toHaveLength(0);
+    }
+  });
+
+  it("refuses a corridor that is not listed, and never calls the service", async () => {
+    const { config, calls } = stub(200, "{}");
+    const mainnet = JSON.stringify({ idempotencyKey: "run-0002", corridorId: "mx-example" });
+    expect(await proxyCreatePayment(config, mainnet)).toEqual({
+      status: 403,
+      body: { error: "corridor_not_allowed" },
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("refuses a body that names no corridor, or one that is not a string", async () => {
+    const { config, calls } = stub(200, "{}");
+    for (const body of [{}, { corridorId: 7 }, { corridorId: ["reference-testnet"] }]) {
+      const out = await proxyCreatePayment(config, JSON.stringify(body));
+      expect(out.status, JSON.stringify(body)).toBe(403);
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("refuses a client over its limit, and never calls the service", async () => {
+    const { config, calls } = stub(200, "{}");
+    const limiter = createRateLimiter({ max: 2, windowMs: 60_000 });
+    const send = () => proxyCreatePayment(config, payment, "203.0.113.7", limiter);
+
+    expect((await send()).status).toBe(200);
+    expect((await send()).status).toBe(200);
+    expect(await send()).toEqual({ status: 429, body: { error: "rate_limited" } });
+    expect(calls).toHaveLength(2);
+
+    const read = () => proxyGetPayment(config, "run-0001", "203.0.113.7", limiter);
+    expect((await read()).status).toBe(429);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("does not let one client's calls use up another's", async () => {
+    const { config } = stub(200, "{}");
+    const limiter = createRateLimiter({ max: 1, windowMs: 60_000 });
+    expect((await proxyCreatePayment(config, payment, "a", limiter)).status).toBe(200);
+    expect((await proxyCreatePayment(config, payment, "a", limiter)).status).toBe(429);
+    expect((await proxyCreatePayment(config, payment, "b", limiter)).status).toBe(200);
+  });
+});
+
+describe("the rate limiter", () => {
+  it("lets a client back in when the window has passed", () => {
+    let t = 1_000;
+    const limiter = createRateLimiter({ max: 1, windowMs: 60_000 }, () => t);
+    expect(limiter.allow("a")).toBe(true);
+    expect(limiter.allow("a")).toBe(false);
+    t += 59_999;
+    expect(limiter.allow("a")).toBe(false);
+    t += 1;
+    expect(limiter.allow("a")).toBe(true);
+  });
+
+  it("names a client by the first forwarded address", () => {
+    const headers = (h: Record<string, string>) => ({ get: (n: string) => h[n] ?? null });
+    const forwarded = headers({ "x-forwarded-for": "203.0.113.7, 10.0.0.1" });
+    expect(clientOf(forwarded)).toBe("203.0.113.7");
+    expect(clientOf(headers({ "x-real-ip": "198.51.100.2" }))).toBe("198.51.100.2");
+    expect(clientOf(headers({}))).toBe("unknown");
   });
 });
 
@@ -133,6 +223,7 @@ describe("POST /payments", () => {
   it("answers 502 when the service cannot be reached, without echoing the cause", async () => {
     const config: SendProxyConfig = {
       serviceUrl: "http://service.internal",
+      allowedCorridors: ["reference-testnet"],
       apiKey: KEY,
       fetch: (async () => {
         throw new Error(`connect ECONNREFUSED with ${KEY}`);
@@ -146,6 +237,7 @@ describe("POST /payments", () => {
   it("answers 504 when the service takes too long", async () => {
     const config: SendProxyConfig = {
       serviceUrl: "http://service.internal",
+      allowedCorridors: ["reference-testnet"],
       fetch: (async () => {
         throw Object.assign(new Error("timed out"), { name: "TimeoutError" });
       }) as unknown as typeof fetch,
