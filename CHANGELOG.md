@@ -7,14 +7,44 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
-### Added — live testnet scenarios for limits, customer KYC info, outage recovery, and refunds ([#676](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/676), [#675](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/675), [#674](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/674), [#673](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/673))
+### Added — live testnet failure scenarios against the reference anchor ([#673](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/673), [#674](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/674), [#675](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/675), [#676](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/676))
 
-- Live testnet scenario runner for amounts outside anchor limits (`examples/verify-scenario-limits.ts`, `pnpm verify:scenario-limits`), asserting refusal with `PRESETTLE_AMOUNT_OUT_OF_RANGE` and 0 money moved ([#676](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/676)).
-- Live testnet scenario runner for anchor KYC inquiries (`examples/verify-scenario-needs-info.ts`, `pnpm verify:scenario-needs-info`), asserting halt with `PRESETTLE_RECEIVER_NOT_ACCEPTED` before settle and 0 money moved ([#673](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/673)).
-- Live testnet scenario runner for anchor outages during the flow (`examples/verify-scenario-anchor-down.ts`, `pnpm verify:scenario-anchor-down`), exercising anchor stop/restart and verifying recovery without double settlement ([#675](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/675)).
-- Live testnet scenario runner for payout failures and refunds (`examples/verify-scenario-refund.ts`, `pnpm verify:scenario-refund`), exercising `payout-watch refund` and asserting terminal state `refunded` with exactly 1 on-chain settlement ([#674](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/674)).
-- Added sibling GitHub Actions workflow `.github/workflows/reference-live-scenarios.yml` and unified runner `examples/verify-live-scenarios.ts` (`pnpm verify:scenarios`) writing verification matrices to `$GITHUB_STEP_SUMMARY`.
-- Added unit tests in `tests/live-scenarios.test.ts` covering all four failure scenarios and invariants.
+- `.github/workflows/reference-live-scenarios.yml` runs, daily and on demand,
+  against one reference stack: amounts below the anchor's minimum and above its
+  maximum (`pnpm verify:scenario-limits`, refused for the limit with nothing
+  submitted and the signer's balance unchanged), the anchor asking for more
+  customer information (`scripts/fault-scenario.sh ask-info held`) and the
+  anchor going down mid-flow (`scripts/fault-scenario.sh outage=45 completed`).
+  The refund scenario keeps running in `reference-corridor.yml`.
+- `pnpm verify:corridor` now checks the ledger after every run: the signer's
+  transactions on Horizon must show the payment leaving exactly once if it
+  settled and never if it did not, or it exits `5`. It writes the verdict, trail
+  and settlement to `$GITHUB_STEP_SUMMARY` under `SCENARIO`, and
+  `fault-scenario.sh` adds whether the fault applied — so every fault scenario,
+  refund included, leaves its evidence in the job page.
+- `scripts/reference-anchor.sh faults outage=N` stops the anchor's SEP and
+  platform servers for `N` seconds once it holds a payment's funds, starts them
+  again, then pays out; `SEND_MIN_AMOUNT` on `up` raises the bridge asset's
+  advertised SEP-31 minimum, which the image leaves at 0.
+- Unit tests (`tests/live-scenarios.test.ts`) for the ledger accounting, the
+  out-of-limits amounts and the engine's outcome in each scenario, with no
+  network or containers.
+
+### Fixed — `reference-anchor.sh faults` never found the payment to break
+
+- `faults` joined its SQL predicate with `IFS=' AND '`, which bash reduces to
+  its first character, so every `delay`, `reject`, `ask-info` and `refund` ran
+  `... >= N status = 'pending_receiver'`, an invalid query whose error was
+  discarded: the fault waited out `FAULT_TIMEOUT_SECS` and never applied,
+  including the nightly refund scenario in `reference-corridor.yml`.
+- `faults ask-info` wrote a `message` column the platform's `sep31_transaction`
+  table does not have (Anchor Platform 2.10.1 calls it
+  `required_info_message`), so the update always failed.
+- `faults reject` and `faults refund` posted their JSON-RPC to the platform
+  API's `/transactions`, a REST resource that refuses `POST` (HTTP 500); the
+  RPC controller is mapped at the API's root. `ask-info`, `refund` and the new
+  `outage` were run against a live reference stack on testnet after these
+  fixes; `delay` and `reject` share the fixed code but were not run.
 
 ### Added — configurable failure injection for the reference anchor ([#678](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/678))
 

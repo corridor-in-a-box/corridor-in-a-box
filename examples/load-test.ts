@@ -52,6 +52,8 @@ export interface OnChainTransaction {
   readonly memo?: string;
   readonly createdAt: string;
   readonly successful: boolean;
+  /** The account that submitted it; absent when Horizon did not say. */
+  readonly sourceAccount?: string;
 }
 
 export const MAX_CONCURRENCY = 100;
@@ -153,7 +155,13 @@ export async function fetchSignerTransactionsSince(
     if (!res.ok) throw new Error(`Horizon transactions HTTP ${res.status}`);
     const body = (await res.json()) as {
       _embedded?: {
-        records?: { hash: string; memo?: string; created_at: string; successful: boolean }[];
+        records?: {
+          hash: string;
+          memo?: string;
+          created_at: string;
+          successful: boolean;
+          source_account?: string;
+        }[];
       };
       _links?: { next?: { href?: string } };
     };
@@ -169,6 +177,7 @@ export async function fetchSignerTransactionsSince(
         memo: r.memo,
         createdAt: r.created_at,
         successful: r.successful,
+        sourceAccount: r.source_account,
       });
     }
     if (reachedOlder || records.length === 0) break;
