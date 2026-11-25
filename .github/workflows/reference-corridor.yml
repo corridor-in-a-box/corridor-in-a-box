@@ -66,6 +66,11 @@ jobs:
             || missing="$missing scripts/reference-anchor.sh#doctor(#40)"
           node -e 'process.exit(require("./package.json").scripts["verify:corridor"] ? 0 : 1)' \
             || missing="$missing pnpm-verify:corridor(#41)"
+          # The fault scenario below is half of what this job now proves.
+          test -x scripts/fault-scenario.sh \
+            || missing="$missing scripts/fault-scenario.sh#faults(#678)"
+          grep -q 'faults)' scripts/reference-anchor.sh \
+            || missing="$missing scripts/reference-anchor.sh#faults(#678)"
           if [ -n "$missing" ]; then
             echo "::error::this job needs, and cannot find:$missing"
             exit 1
@@ -133,6 +138,21 @@ jobs:
           pnpm verify:corridor
         env:
           CORRIDOR_SIGNER_SECRET: ${{ env.SIGNER_SECRET }}
+
+      # The fault scenario (#678): the same whole corridor, but the anchor
+      # refunds instead of completing, and EXPECT_STATE=refunded makes that the
+      # assertion. Running it here, on the stack already standing, is what keeps
+      # `scripts/reference-anchor.sh faults` a live control rather than a
+      # documented one — a regression in the injection fails this nightly job.
+      - name: Run the corridor under an injected refund
+        run: |
+          set -euo pipefail
+          pnpm fund:testnet
+          scripts/fault-scenario.sh refund refunded
+        env:
+          CORRIDOR_SIGNER_SECRET: ${{ env.SIGNER_SECRET }}
+          FUND_AMOUNT: "30"
+          FUND_MIN_BALANCE: "50"
 
       # --- evidence and cleanup -------------------------------------------
 

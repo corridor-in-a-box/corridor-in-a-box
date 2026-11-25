@@ -29,6 +29,52 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 - The attested-anchor list on each network can be filtered by SEP (advertised, or SEP-31
   probed and working), probed receive asset, declared country and domain. The filters live in
   the URL beside `?network=`, so a filtered view can be linked to.
+### Added — configurable failure injection for the reference anchor ([#678](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/678))
+
+- `scripts/reference-anchor.sh faults <spec>` makes the local Anchor Platform
+  reference stack misbehave on demand: `delay=N` holds the payout, `reject`
+  fails the transaction, `ask-info` parks it in `pending_customer_info_update`,
+  `refund` reports the full refund SEP-31 allows, and `quote-expiry=N` issues
+  quotes that expire in `N` seconds. It plays the anchor's business server (the
+  platform API, or the status the platform reads back) instead of forking the
+  platform, and targets the next payment opened after it is armed — or one pinned
+  with `FAULT_TX_ID` and/or selected by amount with `FAULT_AMOUNT`.
+- `pnpm verify:corridor` accepts `EXPECT_STATE`, so a fault scenario asserts the
+  terminal state the engine should reach (for example `refunded`) instead of
+  requiring `completed`.
+- `scripts/fault-scenario.sh [spec] [expected-state]` runs one live corridor under
+  a fault (default `refund` → `refunded`), and `reference-corridor.yml` runs it
+  on its schedule against the reference stack — so the control is exercised by a
+  live scenario, not only documented.
+- `docs/operations.md` documents every fault, how it is applied, and the expected
+  engine outcome for each.
+
+### Added — a server-side proxy from the send app to the service ([#690](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/690))
+
+- `POST /api/send/payments` and `GET /api/send/payments/:key` in `web/` call `@corridor/service` with
+  `SEND_APP_SERVICE_API_KEY`, which is read on the server only. The browser holds no key and cannot
+  choose the service URL, the path or any header.
+- The routes take no credentials from the caller, so they are gated. They fail closed with 503 until
+  `SEND_APP_SERVICE_URL` and `SEND_APP_CORRIDORS` are set, refuse a payment for any corridor not listed
+  in `SEND_APP_CORRIDORS` (403), and limit each client to 10 payments and 120 reads per minute (429).
+- Service error bodies are cut down to their code and the offending field before they reach the browser.
+- `tests/web-send-proxy.test.ts` covers the proxy and checks that no client component imports it or
+  names the key variable.
+
+### Changed — probe findings recorded for MyKobo, BlindPay, Coins.ph and Anclap ([#650](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/650), [#651](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/651), [#653](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/653), [#654](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/654))
+
+- `mykobo.co` (#650): the probe is right and the anchor's endpoint is down. The toml loads and
+  advertises SEP-6, SEP-10, SEP-12, SEP-24 and SEP-31, but every one of those APIs lives on
+  `stellar.mykobo.co`, a CNAME to an AWS load balancer name that no longer exists (NXDOMAIN), so
+  `sep31_info` fails with `fetch failed` before any HTTP exchange. SEP-31 `GET /info` needs no
+  auth, so there is nothing to fix in the probe.
+- `blindpay.com` (#651): `toml_fetch` gets HTTP 403 from a Cloudflare challenge page; nothing about
+  what it serves can be read.
+- `coins.ph` (#653): the domain resolves, but `/.well-known/stellar.toml` returns an HTML 404 page
+  (some attempts also reset the TLS connection), so there is no toml and no SEP-31 receive side.
+- `anclap.com.ar` (#654): the domain does not exist in DNS (NXDOMAIN, no name servers).
+- Dated findings are in `contracts/anchors.json`; `tests/probe-anchor-findings.test.ts` checks the
+  records and that the probe reports an unreachable SEP-31 host as a `sep31_info` failure.
 
 ### Added — send app page scaffold with a permanent testnet banner ([#684](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/684))
 
