@@ -7,11 +7,24 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
-### Added — rate outlier sample detection, African anchor expansion, and probe findings ([#602](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/602), [#660](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/660), [#661](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/661), [#664](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/664))
+### Added — outlier flags in rate history, Flutterwave and Bitso findings, and five African anchors ([#602](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/602), [#660](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/660), [#661](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/661), [#664](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/664))
 
-- Added outlier detection and estimation exclusion in `@corridor/router` (#602): flags price samples deviating beyond a configurable threshold (default 10%) from the recent median, excluding outliers from P25 estimation while preserving them in historical audits.
-- Re-probed and documented findings for Flutterwave (`flutterwave.com`) (#660) and Bitso (`bitso.com`) (#661) in `contracts/anchors.json`.
-- Added five African anchors to the fleet in `contracts/anchors.json` (#664): Yellow Card (`yellowcard.io`), Paychant (`paychant.com`), Fonbnk (`fonbnk.com`), HoneyCoin (`honeycoin.app`), and Kotani Pay (`kotanipay.com`).
+- Rate history flags outliers ([#602](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/602)). `PostgresRateHistoryStore.recordFlaggingOutliers`
+  stores a sample with `outlier = true` when its rate is more than 10% (configurable, in basis
+  points) from the median of the series' last 20 samples; `setOutlier` sets or clears the flag
+  later, and `flagOutliers` re-runs the pass over stored history. The detector (`checkOutlier`,
+  `medianRate`) works on decimal strings with BigInt, never a float. Flagged samples are kept and
+  listed, and `buildEstimatedOption` leaves them out of the P25, the sample count and the history
+  span, so one bad price cannot drag an estimate.
+- Flutterwave and Bitso re-probed on 2026-11-25 ([#660](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/660), [#661](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/661)): both domains
+  resolve and both answer HTTP 404 for `/.well-known/stellar.toml`, so neither advertises a SEP
+  or a SEP-31 receive side. The dated findings are in `contracts/anchors.json`.
+- Five African anchors from the Stellar Anchor Directory join the fleet ([#664](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/664)):
+  Finclusive (`finclusive.com`), Chipper Cash (`chippercash.com`), Link (`linkio.africa`),
+  ImpalaPay (`impalapay.com`) and Yellow Card (`yellowcard.io`). Each was probed on 2026-11-25;
+  only Finclusive's toml loads, and its API host's TLS certificate has expired. The selection
+  method, the probe results and the entries left out are recorded in `contracts/anchors.json`.
+
 ### Added — send app: amount form, route options, locked-price countdown and recipient fields ([#685](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/685), [#686](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/686), [#687](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/687), [#688](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/688))
 
 - `/send` now runs the send flow inside the existing scaffold and testnet banner. The form checks

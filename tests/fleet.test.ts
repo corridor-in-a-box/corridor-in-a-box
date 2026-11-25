@@ -32,11 +32,11 @@ describe("contracts/anchors.json fleet", () => {
       "ntokens.com",
       "pubnet-sep.latamex.com",
       "etherfuse.com",
+      "finclusive.com",
+      "chippercash.com",
+      "linkio.africa",
+      "impalapay.com",
       "yellowcard.io",
-      "paychant.com",
-      "fonbnk.com",
-      "honeycoin.app",
-      "kotanipay.com",
     ]);
     expect(fleet.anchors.map((a) => ({ domain: a.domain, kind: a.kind }))).toEqual([
       { domain: "testanchor.stellar.org", kind: "test" },
@@ -66,11 +66,11 @@ describe("contracts/anchors.json fleet", () => {
       { domain: "ntokens.com", kind: "other" },
       { domain: "pubnet-sep.latamex.com", kind: "other" },
       { domain: "etherfuse.com", kind: "other" },
-      { domain: "yellowcard.io", kind: "offramp" },
-      { domain: "paychant.com", kind: "offramp" },
-      { domain: "fonbnk.com", kind: "other" },
-      { domain: "honeycoin.app", kind: "other" },
-      { domain: "kotanipay.com", kind: "offramp" },
+      { domain: "finclusive.com", kind: "other" },
+      { domain: "chippercash.com", kind: "other" },
+      { domain: "linkio.africa", kind: "other" },
+      { domain: "impalapay.com", kind: "other" },
+      { domain: "yellowcard.io", kind: "other" },
     ]);
   });
 
