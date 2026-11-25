@@ -11,7 +11,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 - `POST /api/send/payments` and `GET /api/send/payments/:key` in `web/` call `@corridor/service` with
   `SEND_APP_SERVICE_API_KEY`, which is read on the server only. The browser holds no key and cannot
-  choose the service URL, the path or any header. Both routes answer 503 until `SEND_APP_SERVICE_URL` is set.
+  choose the service URL, the path or any header.
+- The routes take no credentials from the caller, so they are gated. They fail closed with 503 until
+  `SEND_APP_SERVICE_URL` and `SEND_APP_CORRIDORS` are set, refuse a payment for any corridor not listed
+  in `SEND_APP_CORRIDORS` (403), and limit each client to 10 payments and 120 reads per minute (429).
 - Service error bodies are cut down to their code and the offending field before they reach the browser.
 - `tests/web-send-proxy.test.ts` covers the proxy and checks that no client component imports it or
   names the key variable.
