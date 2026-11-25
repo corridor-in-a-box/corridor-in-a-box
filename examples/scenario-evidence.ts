@@ -154,7 +154,8 @@ export function renderScenarioSummary(
   checks: readonly ScenarioCheck[],
 ): string {
   const passed = checks.length > 0 && checks.every((c) => c.ok);
-  const cell = (s: string) => s.replace(/\|/g, "\\|").replace(/\r?\n/g, "<br>");
+  const cell = (s: string) =>
+    s.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\r?\n/g, "<br>");
   return [
     `### ${title}`,
     "",
