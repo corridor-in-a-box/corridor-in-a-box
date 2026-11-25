@@ -45,6 +45,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   RPC controller is mapped at the API's root. `ask-info`, `refund` and the new
   `outage` were run against a live reference stack on testnet after these
   fixes; `delay` and `reject` share the fixed code but were not run.
+
 ### Added — send app: amount form, route options, locked-price countdown and recipient fields ([#685](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/685), [#686](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/686), [#687](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/687), [#688](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/688))
 
 - `/send` now runs the send flow inside the existing scaffold and testnet banner. The form checks
