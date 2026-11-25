@@ -5,6 +5,8 @@
 #
 #   scripts/fault-scenario.sh                    # refund the next payment -> `refunded`
 #   scripts/fault-scenario.sh quote-expiry=0 refunded
+#   scripts/fault-scenario.sh ask-info held      # #673: the anchor wants more info
+#   scripts/fault-scenario.sh outage=45 completed # #675: the anchor goes down mid-flow
 #
 # The fault is armed first — it waits for the NEXT payment — and then
 # `pnpm verify:corridor` runs with EXPECT_STATE set, so reaching the faulted
@@ -14,8 +16,14 @@
 # purpose").
 #
 # Only `refund` implies its expected state (`refunded`). `delay`, `reject`,
-# `ask-info` and `quote-expiry` end wherever the manifest's recovery settings
-# take the run (see docs/operations.md), so they need the state spelled out.
+# `ask-info`, `outage` and `quote-expiry` end wherever the manifest's recovery
+# settings take the run (see docs/operations.md), so they need the state spelled
+# out.
+#
+# verify:corridor also checks the ledger — the payment's money left the signer
+# exactly once if it settled, never if it did not — and writes the verdict to
+# $GITHUB_STEP_SUMMARY under SCENARIO (default: the fault spec); this script
+# adds whether the fault applied.
 #
 # Requires the stack already up (`scripts/reference-anchor.sh up`), a funded
 # testnet signer in CORRIDOR_SIGNER_SECRET, and no payout-watch running: both
@@ -45,13 +53,21 @@ trap 'kill "$fault_pid" 2>/dev/null || true' EXIT
 
 echo "fault-scenario: armed \`$spec\`; the corridor must end \`$expected\`"
 verdict=0
-EXPECT_STATE="$expected" pnpm verify:corridor
+SCENARIO="${SCENARIO:-Fault \`$spec\` -> \`$expected\`}" EXPECT_STATE="$expected" pnpm verify:corridor
 verdict=$?
 
 # The fault only counts if it actually applied: a run that happens to reach the
 # expected state for some other reason is not evidence the injection worked.
 fault_status=0
 wait "$fault_pid" || fault_status=$?
+summary="${GITHUB_STEP_SUMMARY:-${SUMMARY_FILE:-}}"
+if [ -n "$summary" ]; then
+  if [ "$fault_status" -eq 0 ]; then
+    printf -- '- ✅ fault `%s` applied (log: `%s`)\n\n' "$spec" "$fault_log" >>"$summary" || true
+  else
+    printf -- '- ❌ fault `%s` never applied (log: `%s`)\n\n' "$spec" "$fault_log" >>"$summary" || true
+  fi
+fi
 if [ "$fault_status" -ne 0 ]; then
   echo "fault-scenario: \`$spec\` never applied — its log:" >&2
   sed 's/^/  /' "$fault_log" >&2

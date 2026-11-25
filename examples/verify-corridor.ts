@@ -27,9 +27,17 @@
 //   HORIZON_URL=...               default https://horizon-testnet.stellar.org
 //   MANIFEST=...                  default corridors/reference.corridor.yaml
 //   AMOUNT=...                    default 10.00
-//   EXPECT_STATE=...               require a terminal state other than `completed`
+//   EXPECT_STATE=...              require a terminal state other than `completed`
 //                                 (for fault scenarios; see docs/operations.md)
+//   SCENARIO=...                  title of the job-summary block (default:
+//                                 "Reference corridor"; fault-scenario.sh sets it)
 //   SKIP_DOCTOR=1                 skip the preflight (stack managed elsewhere)
+//
+// Whatever the terminal state, the run is then checked against the ledger: the
+// signer's own transactions on Horizon must show this payment's money leaving
+// exactly once if the engine settled it, and not at all if it did not. The
+// verdict, the trail and that count go to $GITHUB_STEP_SUMMARY (SUMMARY_FILE
+// outside Actions), so a scheduled run leaves its evidence in the job page.
 
 import { fileURLToPath } from "node:url";
 import { loadCorridor } from "@corridor/manifest";
@@ -47,6 +55,13 @@ import {
   EXIT_STACK_UNFIT,
   EXIT_NOT_COMPLETED,
 } from "../packages/cli/src/wire.js";
+import { fetchSignerTransactionsSince } from "./load-test.js";
+import {
+  appendStepSummary,
+  movedAtMostOnce,
+  renderScenarioSummary,
+  type ScenarioCheck,
+} from "./scenario-evidence.js";
 
 const ANCHOR = (process.env.REFERENCE_ANCHOR_URL ?? "http://localhost:8080").replace(
   /\/+$/,
@@ -173,6 +188,8 @@ async function main(): Promise<void> {
     `  intent:  ${intent.idempotencyKey} (${AMOUNT} ${corridor.settlement.bridge_asset})\n`,
   );
 
+  // Horizon timestamps are whole seconds; start the ledger window a little early.
+  const ledgerSince = new Date(Date.now() - 5_000);
   const result = await execute(intent, corridor, deps);
 
   // The trail comes from the audit sink rather than RunResult, so a FAILED run
@@ -194,37 +211,88 @@ async function main(): Promise<void> {
   // A fault scenario (docs/operations.md) expects a run that does NOT complete:
   // the point is the engine's reaction to a misbehaving anchor, so the terminal
   // state is the assertion rather than `completed`.
-  const expected = process.env.EXPECT_STATE;
-  const terminal = stored?.state;
-  const expectedReached = expected !== undefined && expected !== "" && terminal === expected;
+  const expected = process.env.EXPECT_STATE || undefined;
+  const want = expected ?? "completed";
+  const terminal = stored?.state ?? (result.ok ? result.value.state : undefined);
+  const stateOk = terminal === want;
 
   if (!result.ok) {
     console.error(`\n✗ ${result.error.code} — ${result.error.message}`);
     console.error(`  terminal state: ${terminal ?? "unknown"}`);
-    if (expectedReached) {
-      console.log(`\n✓ terminal state is "${expected}", as the fault scenario expects`);
-      return;
-    }
-    process.exit(EXIT_NOT_COMPLETED);
+  } else if (stored?.lastError) {
+    console.log(`  last error: ${stored.lastError}`);
+  }
+  if (stateOk && expected !== undefined) {
+    console.log(`\n✓ terminal state is "${expected}", as the fault scenario expects`);
+  } else if (!stateOk && expected !== undefined) {
+    console.error(`\n✗ expected terminal state "${expected}", got "${terminal ?? "unknown"}"`);
+  } else if (!stateOk && result.ok) {
+    console.error(`\n✗ terminal state is "${terminal ?? "unknown"}", not "completed"`);
   }
 
-  if (result.value.state !== "completed") {
-    if (expectedReached) {
-      console.log(
-        `\n✓ terminal state is "${expected}", as the fault scenario expects` +
-          (stored?.lastError ? `\n  last error: ${stored.lastError}` : ""),
-      );
-      return;
-    }
-    console.error(`\n✗ terminal state is "${result.value.state}", not "completed"`);
-    if (stored?.lastError) console.error(`  last error: ${stored.lastError}`);
-    process.exit(EXIT_NOT_COMPLETED);
+  // The ledger, not the engine, says how often the money left: a payment that
+  // settled must appear once among the signer's own transactions, and one that
+  // never settled must not appear at all.
+  let moved: ScenarioCheck;
+  try {
+    const txs = await fetchSignerTransactionsSince(HORIZON, signer.publicKey, ledgerSince);
+    moved = movedAtMostOnce(
+      txs,
+      { memo: stored?.memo, stellarTxHash: stored?.stellarTxHash },
+      signer.publicKey,
+    );
+  } catch (e) {
+    moved = {
+      label: "money moved at most once on chain",
+      ok: false,
+      detail: `could not read the signer's transactions from Horizon: ${String(e)}`,
+    };
   }
+  console.log(`  ${moved.ok ? "✓" : "✗"} ${moved.label} — ${moved.detail}`);
 
-  if (expected !== undefined && expected !== "") {
-    console.error(`\n✗ expected terminal state "${expected}", but the run completed`);
+  const checks: ScenarioCheck[] = [
+    {
+      label: `terminal state is \`${want}\``,
+      ok: stateOk,
+      detail: `state=${terminal ?? "unknown"}`,
+    },
+    moved,
+  ];
+  appendStepSummary(
+    renderScenarioSummary(
+      process.env.SCENARIO || "Reference corridor",
+      [
+        { label: "Corridor", value: `\`${corridor.id}\`` },
+        {
+          label: "Intent",
+          value: `\`${intent.idempotencyKey}\` (${AMOUNT} ${corridor.settlement.bridge_asset})`,
+        },
+        { label: "Expected state", value: `\`${want}\`` },
+        { label: "Terminal state", value: `\`${terminal ?? "unknown"}\`` },
+        {
+          label: "Error",
+          value: result.ok
+            ? (stored?.lastError ?? "none")
+            : `\`${result.error.code}\` — ${result.error.message}`,
+        },
+        { label: "Trail", value: `\`${trail.join(" -> ") || "none"}\`` },
+        {
+          label: "Settlement",
+          value: stored?.stellarTxHash
+            ? `[\`${stored.stellarTxHash}\`](https://stellar.expert/explorer/testnet/tx/${stored.stellarTxHash})`
+            : "none",
+        },
+      ],
+      checks,
+    ),
+  );
+
+  if (!stateOk) process.exit(EXIT_NOT_COMPLETED);
+  if (!moved.ok) {
+    console.error(`\n✗ the ledger does not show this payment moving at most once`);
     process.exit(EXIT_NOT_COMPLETED);
   }
+  if (expected !== undefined) return;
 
   console.log(`\n✓ corridor completed end to end against the reference anchor`);
   console.log(`  ${audit.entries.length} transitions recorded`);

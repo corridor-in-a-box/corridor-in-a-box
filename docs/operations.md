@@ -262,6 +262,14 @@ Exit codes are distinct so CI can tell the cases apart: `2` missing
 anchor does not quote), `4` the stack is not fit (`doctor` failed), `5` the
 corridor ran and did not complete.
 
+Reaching the right state is not the whole verdict. The run is then checked
+against the ledger: the signer's own successful transactions on Horizon that
+carry this payment (its recorded hash, or its SEP-31 memo) must number exactly
+one if the engine settled it and zero if it did not. More than one is the money
+moving twice, and also exits `5`. The verdict, the trail, the settlement and
+that count are appended to `$GITHUB_STEP_SUMMARY` (`SUMMARY_FILE` outside
+Actions) under the title in `SCENARIO`.
+
 ### `pnpm verify:crash-resume` — kill the service after settle
 
 ```bash
@@ -319,6 +327,7 @@ scripts/reference-anchor.sh faults <spec>
 | `ask-info`       | Moves it to `pending_customer_info_update`           | Writes the status the platform reads back on `GET /transactions/:id` (2.x has no RPC for it)                       |
 | `refund`         | Reports a **full** refund and moves it to `refunded` | Platform JSON-RPC `notify_refund_sent`; SEP-31 permits exactly one full refund                                     |
 | `quote-expiry=N` | Issues quotes that expire `N` seconds after issuance | A Postgres trigger on the platform's quote table, dropped as soon as one quote is caught                           |
+| `outage=N`       | Goes down for `N` seconds while it holds the funds   | `podman stop` of `ap-sep` (SEP and platform servers), `podman start` after `N`s, then the payout as `payout-watch` |
 
 Each invocation arms one fault, waits for the **next payment** (a transaction
 opened after it was armed), applies it once, prints the SEP-31 transaction id
@@ -377,6 +386,17 @@ What to expect from the others, on `corridors/reference.corridor.yaml`
   `RECONCILE_STALLED` after ~20s; raise `recovery.reconcile.stall_polls` in a
   copy of the manifest to let `SETTLEMENT_TIMEOUT` say
   "awaiting input from another party" instead.
+- **`outage=N`** — the anchor stops answering once it holds the funds (the
+  transaction is `pending_receiver`). The engine's polls fail and it keeps
+  polling: a failed poll is neither a status nor a stall, so only
+  `recovery.timeout_seconds` bounds it. When `ap-sep` serves again (SEP and
+  platform API both) the fault pays out, confirms in the platform's database
+  that the transaction left `pending_receiver` — the reference server answers
+  `200` to `/process` even when its call into a still-booting platform fails —
+  and the run ends `completed` with the payment settled once. `ap-sep` takes
+  minutes to boot on a busy machine and the engine's polls back off to 60s, so
+  keep `N` well inside that timeout (900s on the reference corridor), or the run
+  ends `held` with `SETTLEMENT_TIMEOUT` instead.
 - **`quote-expiry=0`** — the anchor's stored quote is already expired when it is
   asked to open the transaction. Note the limit: the engine holds the expiry the
   anchor _returned_ at quote time, so this exercises the anchor's own refusal of
@@ -386,6 +406,72 @@ Faults are test-profile machinery, not a production control: they write to the
 platform's own database and use its internal business-server API, both of which
 are reachable only from this stack. `down` drops the quote trigger if a
 `quote-expiry` fault never caught a quote.
+
+### Live failure scenarios
+
+`.github/workflows/reference-live-scenarios.yml` runs the anchor's failure
+modes on testnet, daily and on demand, against one reference stack; the refund
+scenario runs in `reference-corridor.yml` (above). Each one asserts the
+terminal state **and** that the payment's money left the signer at most once,
+read from Horizon, and leaves a PASS/FAIL block in the job summary.
+
+| Scenario                                             | Command                                         | Must end                                                              |
+| ---------------------------------------------------- | ----------------------------------------------- | --------------------------------------------------------------------- |
+| Amounts outside the anchor's limits (#676)           | `pnpm verify:scenario-limits`                   | `failed`, refused for its limit, nothing submitted, balance unchanged |
+| The anchor asks for more customer information (#673) | `scripts/fault-scenario.sh ask-info held`       | `held`, settled exactly once                                          |
+| The anchor goes down during the flow (#675)          | `scripts/fault-scenario.sh outage=45 completed` | `completed` after the anchor returns, settled exactly once            |
+| The payout fails and the anchor refunds (#674)       | `scripts/fault-scenario.sh refund refunded`     | `refunded`, settled exactly once                                      |
+
+```bash
+SEND_MIN_AMOUNT=5 scripts/reference-anchor.sh up
+export CORRIDOR_SIGNER_SECRET=S…
+pnpm verify:scenario-limits
+scripts/fault-scenario.sh ask-info held
+scripts/fault-scenario.sh outage=45 completed
+```
+
+**Limits.** `verify:scenario-limits` reads the bridge asset's `min_amount` and
+`max_amount` from the anchor's own `GET /sep31/info` and pays one whole unit
+below the minimum and one above the maximum. The image advertises a minimum of
+`0`, below which nothing is a payment, so the stack must be started with
+`SEND_MIN_AMOUNT` (whole units; it rewrites `send.min_amount` for the asset
+issued by `BRIDGE_ASSET_ISSUER` in the extracted config). Keep it above `2`:
+the reference server's quotes carry a fixed `1.00` fee, and anything at or below
+that fails at `GET /rate` (the sharp edge above) before the limit is consulted.
+On this stack the quote passes and `POST /sep31/transactions` refuses with
+`sell_amount less than min limit` / `sell_amount exceeds max limit`; the
+scenario fails unless the refusal names a limit, so an unrelated failure cannot
+pass for one. The extracted config is cached, so a raised minimum stays until
+`CONFIG_DIR` is deleted; `10.00`, the default amount of every other run, is
+inside it.
+
+Two things the scenario works around, on purpose and in the open. The engine
+caps a corridor with no fresh canary proof at `10`, which would refuse the
+above-maximum amount before the anchor saw it, so the run lifts that cap to the
+amount under test and instead replaces the submitter with one that refuses to
+settle anything. And the limits are read raw, with `@corridor/probe`'s parser:
+SEP-31 states them as JSON numbers, which `Sep31Adapter.getInfo()` drops rather
+than risk float imprecision — so on this anchor the engine's own pre-settle
+range check (`sep31.amount.range`) has no limits to apply, and the anchor's
+refusal at open is what keeps the money still.
+
+**More customer information.** The anchor moves the funded transaction to
+`pending_customer_info_update`, the SEP-31 status for "update the customer
+before I pay out". The engine reads it as awaiting input, the unchanged status
+trips `RECONCILE_STALLED`, and because the sender cannot pull a payment back
+from the anchor the run parks in `held` for the runbook below — stopped, with
+the money moved once.
+
+**Down during the flow.** See `outage=N` above. The anchor is stopped after it
+has the funds rather than between open and settle: before settle the run makes
+one more call to it (the pre-settle gate reads `/sep31/info`), so an outage
+timed from outside would race that call and the run would end differently from
+night to night. Mid-reconcile is deterministic and is the case that can lose
+track of money.
+
+Each scenario is its own payment and its own `faults` invocation, and none of
+them runs `payout-watch`: `faults` is the payout operator for a faulted run,
+and the limits scenario never reaches a payout.
 
 ### `pnpm load-test` — concurrent payments against the reference anchor
 
