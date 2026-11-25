@@ -23,6 +23,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   history keeps 18 decimal places.
 - Each request has a timeout. An anchor, a sell asset or a pair that fails (401, timeout,
   malformed body, store refusal) is reported in the result and never stops the rest of the run.
+
 ### Added — live testnet failure scenarios against the reference anchor ([#673](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/673), [#674](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/674), [#675](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/675), [#676](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/676))
 
 - `.github/workflows/reference-live-scenarios.yml` runs, daily and on demand,
