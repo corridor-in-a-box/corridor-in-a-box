@@ -24,6 +24,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   ImpalaPay (`impalapay.com`) and Yellow Card (`yellowcard.io`). Each was probed on 2026-11-25;
   only Finclusive's toml loads, and its API host's TLS certificate has expired. The selection
   method, the probe results and the entries left out are recorded in `contracts/anchors.json`.
+
 ### Added — Registry and attester upgrade tooling, and a preflight for the nightly attestation ([#584](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/584))
 
 - `pnpm preflight:registry` checks the deployed registry and attester against this checkout
