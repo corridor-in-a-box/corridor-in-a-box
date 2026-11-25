@@ -34,6 +34,11 @@ export interface IndicativePriceRequest {
   readonly context?: string;
   /** Safety discount applied to `destAmount` when ranking (default 50 bps). */
   readonly estimateMarginBps?: number;
+  /**
+   * Decimal places of the reported `rate` (default 7, stroop precision). Rate history asks for
+   * more so a small rate keeps its significant digits; amounts are unaffected.
+   */
+  readonly rateScale?: number;
   /** Optional SEP-10 bearer JWT if the anchor authenticates GET /price. */
   readonly authToken?: string;
   readonly fetchImpl?: typeof fetch;
@@ -178,7 +183,7 @@ export async function fetchIndicativePrice(
     });
     if (inconsistent) return fail("QUOTE_UNAVAILABLE", `${req.domain}: ${inconsistent}`);
 
-    const rate = divideAmounts(destAmount, sellAmount);
+    const rate = divideAmounts(destAmount, sellAmount, req.rateScale ?? STROOP_SCALE);
     if (!rate.ok) {
       return fail(
         "QUOTE_UNAVAILABLE",

@@ -9,9 +9,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ### Added — poll SEP-38 indicative prices from attested anchors ([#590](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/590))
 
-- Added `collectSep38Rates` and `createSep38CollectorStep` in `@corridor/engine` to poll indicative prices from anchors in the registry whose `sep38_quote` probe passed.
-- Implemented pair discovery via `GET /prices` followed by reference amount pricing via `GET /price`, tagging samples with `source: "sep38_price"` and the anchor domain.
-- Added per-anchor timeout and error isolation so individual anchor failures (such as 401 Unauthorized, timeout, or malformed body) do not halt the collection run.
+- `pollSep38Prices` in `@corridor/engine` runs one collection: it polls every anchor the
+  registry attests with a passing `sep38_quote` probe and a fresh attestation (plus any anchors
+  named directly), and writes one `sep38_price` sample per listed pair, tagged with the anchor
+  domain, through `PostgresRateHistoryStore`. A collector loop calls it on its schedule.
+- The quote server is read from `ANCHOR_QUOTE_SERVER` in the anchor's stellar.toml (never
+  guessed) and must be a public https URL. Sell assets come from the anchor's `GET /info`, so
+  they are issuer-qualified SEP-38 ids; `GET /prices` is sent with `sell_asset` and the required
+  `sell_amount`, and `GET /price` with the `context` the toml implies, through the router's
+  `fetchIndicativePrice`.
+- The stored rate is buy units per one sell unit (`buy_amount ÷ sell_amount`, fees included),
+  computed on scaled integers. `fetchIndicativePrice` takes an optional `rateScale` so rate
+  history keeps 18 decimal places.
+- Each request has a timeout. An anchor, a sell asset or a pair that fails (401, timeout,
+  malformed body, store refusal) is reported in the result and never stops the rest of the run.
+
 ### Added — send app: amount form, route options, locked-price countdown and recipient fields ([#685](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/685), [#686](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/686), [#687](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/687), [#688](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/688))
 
 - `/send` now runs the send flow inside the existing scaffold and testnet banner. The form checks

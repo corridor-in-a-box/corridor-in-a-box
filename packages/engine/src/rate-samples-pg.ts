@@ -258,6 +258,11 @@ const SEP38_ASSET =
 const DOMAIN =
   /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?::\d{1,5})?$/;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** True for an asset id in the SEP-38 form this store accepts (issuer-qualified for Stellar). */
+export function isSep38AssetId(asset: unknown): asset is string {
+  return typeof asset === "string" && SEP38_ASSET.test(asset);
+}
 const MAX_LIMIT = 10_000;
 
 function toDate(value: number | Date | string, field: string): Date {
@@ -308,7 +313,7 @@ function assertSeries(series: RateSeries): void {
     ["sellAsset", series.sellAsset],
     ["buyAsset", series.buyAsset],
   ] as const) {
-    if (typeof asset !== "string" || !SEP38_ASSET.test(asset)) {
+    if (!isSep38AssetId(asset)) {
       throw new RangeError(
         `${field} must be a SEP-38 asset (stellar:native, stellar:CODE:ISSUER or iso4217:CODE), got ${JSON.stringify(asset)}`,
       );
