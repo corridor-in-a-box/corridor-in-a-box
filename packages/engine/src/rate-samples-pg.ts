@@ -20,6 +20,12 @@
 // DISTINCT`, so they need Postgres 15 or later.
 
 import type { Queryable } from "./idempotency-pg";
+import {
+  checkOutlier,
+  DEFAULT_OUTLIER_WINDOW,
+  type OutlierPolicy,
+  type OutlierVerdict,
+} from "./rate-outliers";
 
 /** Where a sample came from. Mirrors the `source` check constraint below. */
 export const RATE_SAMPLE_SOURCES = [
@@ -154,7 +160,7 @@ export interface RateSampleInput extends RateSeries {
   sampledAt: number | Date | string;
   /** The payment run this sample came from: required for `own_payment`, else null. */
   runId?: string | null;
-  /** Usually left unset; the outlier pass (#602) sets it. */
+  /** Usually left unset; `recordFlaggingOutliers` (#602) sets it. */
   outlier?: boolean;
   detail?: Record<string, unknown> | null;
 }
@@ -438,6 +444,56 @@ export class PostgresRateHistoryStore {
         sample.outlier ?? false,
         sample.detail ? JSON.stringify(sample.detail) : null,
       ],
+    );
+    return res.rows.length > 0;
+  }
+
+  /**
+   * Record a sample with its outlier flag decided first (#602): the flag is set when the rate is
+   * more than `policy.thresholdBps` (default 10%) from the median of the series' last
+   * `policy.windowSize` samples taken before it. The sample is stored either way; a flagged one
+   * stays visible and is left out of estimates and summaries. This is what a collector calls.
+   */
+  async recordFlaggingOutliers(
+    sample: RateSampleInput,
+    policy?: OutlierPolicy,
+  ): Promise<{ stored: boolean; verdict: OutlierVerdict }> {
+    assertRateSample(sample);
+    const windowSize = policy?.windowSize ?? DEFAULT_OUTLIER_WINDOW;
+    const at = toDate(sample.sampledAt, "sampledAt").getTime();
+    const earlier = (
+      await this.list({
+        network: sample.network,
+        sellAsset: sample.sellAsset,
+        buyAsset: sample.buyAsset,
+        source: sample.source,
+        ...(sample.anchorDomain ? { anchorDomain: sample.anchorDomain } : {}),
+        until: at,
+        limit: windowSize + 1,
+      })
+    )
+      .filter((r) => r.sampledAt < at)
+      .slice(0, windowSize)
+      .reverse()
+      .map((r) => r.rate);
+    const verdict = checkOutlier(sample.rate, earlier, policy);
+    const stored = await this.record({ ...sample, outlier: verdict.outlier });
+    return { stored, verdict };
+  }
+
+  /**
+   * Set or clear one stored sample's outlier flag, e.g. after re-running `flagOutliers` over a
+   * day or after a person reviews it. Returns false when no sample has that id. The sample
+   * itself is never changed or deleted. Re-summarise its day afterwards.
+   */
+  async setOutlier(id: string, outlier: boolean): Promise<boolean> {
+    if (typeof id !== "string" || !/^\d+$/.test(id)) {
+      throw new RangeError(`id must be a sample id (digits), got ${JSON.stringify(id)}`);
+    }
+    if (typeof outlier !== "boolean") throw new RangeError("outlier must be a boolean");
+    const res = await this.db.query<{ id: string }>(
+      `update rate_samples set outlier = $2 where id = $1 returning id`,
+      [id, outlier],
     );
     return res.rows.length > 0;
   }

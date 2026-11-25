@@ -799,7 +799,10 @@ later: the unique keys use `nulls not distinct`.
   A series holds one sample per instant, and a payment run one `own_payment`
   sample, so a collector that re-reads an overlapping window stores nothing
   twice. Samples flagged `outlier` are kept and visible, and left out of
-  estimates and summaries.
+  estimates and summaries. A collector records through
+  `recordFlaggingOutliers`, which flags a rate more than 10% (configurable)
+  from the median of the series' last 20 samples; `setOutlier` changes a flag
+  afterwards.
 - `rate_daily_summaries`: per series and UTC day, the sample count, outlier
   count and min, P25, median, P75 and max. Kept forever; raw samples are pruned
   only once their day has a summary row.

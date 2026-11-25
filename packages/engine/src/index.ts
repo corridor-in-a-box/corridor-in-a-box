@@ -69,6 +69,16 @@ export {
   type ListRateDailySummariesFilter,
 } from "./rate-samples-pg";
 export {
+  checkOutlier,
+  flagOutliers,
+  medianRate,
+  DEFAULT_OUTLIER_THRESHOLD_BPS,
+  DEFAULT_OUTLIER_WINDOW,
+  DEFAULT_OUTLIER_MIN_BASELINE,
+  type OutlierPolicy,
+  type OutlierVerdict,
+} from "./rate-outliers";
+export {
   UnimplementedSubmitter,
   createMockSubmitter,
   StellarPaymentStrategy,

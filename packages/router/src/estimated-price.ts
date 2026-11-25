@@ -10,6 +10,12 @@ export const DEFAULT_MIN_ESTIMATE_SPAN_DAYS = 7;
 export interface RateSample {
   rate: string;
   timestampMs: number;
+  /**
+   * Set by rate history's outlier pass (#602, `rate_samples.outlier`). A flagged sample is left
+   * out entirely: it is not in the P25, not counted toward the minimum samples, and does not
+   * extend the history span. Pass stored samples as-is; there is no need to filter them first.
+   */
+  outlier?: boolean;
 }
 
 export interface EstimatedPricePolicy {
@@ -120,7 +126,8 @@ function formatCount(count: number): string {
  * Computes an estimated fallback option from historical rate samples inside the
  * configured window (P25 minus margin). Drops the candidate when the window holds
  * fewer than `minEstimateSamples` usable samples, or when the whole history reaches
- * back less than `minEstimateSpanDays` (now minus the oldest usable sample).
+ * back less than `minEstimateSpanDays` (now minus the oldest usable sample). Samples
+ * flagged as outliers (#602) are never usable.
  */
 export function buildEstimatedOption(request: EstimatePriceRequest): EstimatedPriceOutcome {
   if (!isValidAmount(request.sourceAmount.amount)) {
@@ -156,6 +163,9 @@ export function buildEstimatedOption(request: EstimatePriceRequest): EstimatedPr
   // The oldest usable sample in the whole history: how far back the data reaches.
   let oldestMs = Number.POSITIVE_INFINITY;
   for (const sample of request.history) {
+    if (sample.outlier === true) {
+      continue;
+    }
     if (!Number.isFinite(sample.timestampMs) || sample.timestampMs > nowMs) {
       continue;
     }
