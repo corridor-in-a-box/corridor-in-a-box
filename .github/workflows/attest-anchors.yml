@@ -90,8 +90,18 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      - name: Submit attestations
+      # Fails the run in one line when the deployed registry or attester is behind
+      # main (#584). When attesting would fail per anchor (a bit the registry does
+      # not know) it also stops the submit step; when only functions `pnpm attest`
+      # already skips are missing, the writes that can land still go through and
+      # the run stays red until an admin runs `pnpm upgrade:registry`.
+      - name: Preflight registry contract
+        id: preflight
         if: ${{ env.ATTESTER_SECRET != '' }}
+        run: pnpm preflight:registry
+
+      - name: Submit attestations
+        if: ${{ env.ATTESTER_SECRET != '' && (success() || steps.preflight.outputs.blocking == 'false') }}
         run: pnpm attest --from sweep/sweep.json
 
       # Unset secret on a MANUAL run is a fair state — someone is exercising the

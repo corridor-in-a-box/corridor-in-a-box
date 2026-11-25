@@ -49,6 +49,8 @@
     "registry:read": "tsx examples/read-registry.ts",
     "registry:staleness": "tsx examples/check-staleness.ts",
     "registry:history": "tsx examples/registry-history.ts",
+    "upgrade:registry": "tsx scripts/upgrade-registry.ts",
+    "preflight:registry": "tsx scripts/preflight-registry.ts",
     "attest": "tsx examples/attest.ts",
     "gen:web-data": "tsx scripts/gen-web-data.ts",
     "corridors:catalog": "tsx examples/gen-corridor-catalog.ts",

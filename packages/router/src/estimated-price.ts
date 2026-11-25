@@ -1,5 +1,6 @@
 import { isValidAmount, type Money } from "@corridor/types";
 import { DEFAULT_ESTIMATE_MARGIN_BPS } from "./indicative-price";
+import { percentileRank, windowed } from "./rate-percentile";
 
 export const DEFAULT_ESTIMATE_WINDOW_DAYS = 7;
 /** Default ranking discount for estimated prices: 50 bps (RFC 0004 D3), shared with indicative prices. */
@@ -157,9 +158,9 @@ export function buildEstimatedOption(request: EstimatePriceRequest): EstimatedPr
   }
 
   const nowMs = request.nowMs ?? Date.now();
-  const windowStartMs = nowMs - windowDays * 86_400_000;
 
-  const validSamples: Array<{ rate: string; parsed: ParsedDecimal; timestampMs: number }> = [];
+  const usableSamples: Array<{ rate: string; parsed: ParsedDecimal; timestampMs: number }> =
+    [];
   // The oldest usable sample in the whole history: how far back the data reaches.
   let oldestMs = Number.POSITIVE_INFINITY;
   for (const sample of request.history) {
@@ -174,11 +175,9 @@ export function buildEstimatedOption(request: EstimatePriceRequest): EstimatedPr
       continue;
     }
     oldestMs = Math.min(oldestMs, sample.timestampMs);
-    if (sample.timestampMs < windowStartMs) {
-      continue;
-    }
-    validSamples.push({ rate: sample.rate.trim(), parsed, timestampMs: sample.timestampMs });
+    usableSamples.push({ rate: sample.rate.trim(), parsed, timestampMs: sample.timestampMs });
   }
+  const validSamples = windowed(usableSamples, nowMs, windowDays);
 
   if (validSamples.length < minSamples) {
     return {
@@ -207,9 +206,10 @@ export function buildEstimatedOption(request: EstimatePriceRequest): EstimatedPr
     };
   }
 
+  // P25 by the shared "lower" method (rate-percentile.ts): an observed rate, never an
+  // interpolation, so the price shown is one the anchor actually gave.
   validSamples.sort((a, b) => compareParsedDecimals(a.parsed, b.parsed));
-  const p25Index = Math.floor(0.25 * (validSamples.length - 1));
-  const p25 = validSamples[p25Index]!;
+  const p25 = validSamples[percentileRank(validSamples.length, 0.25)]!;
 
   const rateScale = Math.max(p25.parsed.scale, 7);
   const p25AtScale = p25.parsed.digits * 10n ** BigInt(rateScale - p25.parsed.scale);

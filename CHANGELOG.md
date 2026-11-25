@@ -24,6 +24,64 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   ImpalaPay (`impalapay.com`) and Yellow Card (`yellowcard.io`). Each was probed on 2026-11-25;
   only Finclusive's toml loads, and its API host's TLS certificate has expired. The selection
   method, the probe results and the entries left out are recorded in `contracts/anchors.json`.
+### Added — Registry and attester upgrade tooling, and a preflight for the nightly attestation ([#584](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/584))
+
+- `pnpm preflight:registry` checks the deployed registry and attester against this checkout
+  before anything is written: it reads each contract's wasm spec for the functions the clients
+  call, and simulates `put_anchor` with every current SEP and probe bit. Read-only, no key. It
+  prints one line and exits 1 when the contracts are behind, naming the missing bits or
+  functions. It fails closed: an answer it cannot interpret is an error, never a pass.
+- The `attest-anchors` workflow runs it before `pnpm attest`. A rejected bit or a missing core
+  function stops the submit step (the writes would fail per anchor); missing only the receive
+  functions `pnpm attest` already skips (#773) lets the writes that can land go through, and
+  the run stays red until the contracts are upgraded.
+- `pnpm upgrade:registry [--contract attester]` builds the wasm, uploads it and calls the
+  admin-only `upgrade(new_wasm_hash)`. It simulates by default, submits only with `--submit`
+  (signed by `REGISTRY_ADMIN_SECRET`, which must be the contract's admin and is read from the
+  environment only), defaults to testnet and refuses the public network without
+  `--allow-mainnet`. After a submit it prints the `deployments.json` upgrade entry to add.
+- Runbook in `docs/operations.md`, "Registry and attester upgrades". Diagnosis on 2026-11-25:
+  the testnet registry runs `2db79e0e…` and the attester `1334e4ae…` (the 2026-11-17 upgrades,
+  which took the nightly back to green); `main` builds `2e158d11…` and `e77a15cb…`. The deployed
+  registry accepts all seven SEP and probe bits but lacks `put_receive`, `get_receive` and
+  `receive_limits`, and the attester lacks `attest_receive`, so receive limits are not being
+  written.
+
+### Added — Stellar DEX trade prices in rate history ([#591](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/591))
+
+- `collectDexTrades` (`@corridor/engine`) reads Horizon `/trade_aggregations` at a 15-minute
+  resolution for each pair in `config/dex-pairs.json` and writes one sample per bucket through
+  `PostgresRateHistoryStore`: `source: "dex_trade"`, no anchor domain, sell = base and buy =
+  counter as SEP-38 asset strings, the bucket's `close` verbatim as the rate, and the trade
+  count and volumes in `detail`. Buckets with zero trades are skipped; re-reading an
+  overlapping window stores nothing twice.
+- `config/dex-pairs.json` starts with the corridors' on-chain assets: Circle USDC/XLM on both
+  networks, and the destination anchors' tokens against USDC on the public network (Cowrie
+  `NGNT`, Zeam `ZARZ`; issuers checked against each anchor's `stellar.toml`).
+- Tests run on Horizon responses recorded on 2026-11-25.
+
+### Added — Percentile and window helpers for rate history ([#597](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/597))
+
+- `percentile`, `percentileRank`, `windowed`, `compareDecimals` and `canonicalDecimal` in
+  `@corridor/router` (`rate-percentile.ts`). One documented method, "lower": the value at
+  `floor(p × (n − 1))`, so the result is always an observed rate, digit for digit, with no
+  rounding. Decimal strings are compared as BigInts and `p` is read as the decimal it is
+  written as.
+- The estimated price (#749) now takes its window and its P25 from these helpers. Its output is
+  unchanged.
+- Seeded property tests, like `money-properties.test.ts`: the result is one of the inputs and
+  lies within min/max, is monotonic in `p` and independent of input order; `windowed` keeps
+  exactly the in-window samples; the estimated price's P25 equals `percentile(windowed, 0.25)`.
+
+### Changed — `execute()` records a supplied quote and checks it fits the payment ([#622](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/622))
+
+- A quote passed as `ExecuteOptions.quote` (#733) is now checked before use: it must be for the
+  intent's source asset and amount (settlement sends the quote's amount, while the corridor
+  limits and canary cap were checked against the intent's), with an id, a positive price and
+  dest amount, and an expiry. Otherwise the run stops with `QUOTE_UNAVAILABLE` (not retryable)
+  and is never re-quoted.
+- The transition into `quoted` records `quoteSupplied: true` in the audit trail, and the run
+  logs `corridor.quote.supplied`.
 
 ### Added — live testnet failure scenarios against the reference anchor ([#673](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/673), [#674](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/674), [#675](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/675), [#676](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/676))
 

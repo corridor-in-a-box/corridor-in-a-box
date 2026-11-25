@@ -195,7 +195,9 @@ export interface ExecuteOptions {
    * Pre-obtained caller quote (e.g. a locked option presented to the sender).
    * When present, the engine honours it instead of fetching a fresh quote, and
    * refuses an expired firm quote (`QUOTE_EXPIRED`) rather than re-quoting at
-   * a different rate.
+   * a different rate. A quote for a different source asset or amount than the
+   * intent is refused too (`QUOTE_UNAVAILABLE`, not retryable). The transition
+   * into `quoted` records `quoteSupplied: true` in the audit trail (#622).
    */
   quote?: Quote;
   /**
@@ -578,17 +580,25 @@ export async function execute(
   }
 
   // --- 1. quote ---------------------------------------------------------
+  const quoteSupplied = opts.quote !== undefined;
   const q = await timed("quote", () =>
     quote(adapter, intent, corridor, now(), provider, opts.quote),
   );
   if (!q.ok) return die(q.error);
+  if (quoteSupplied) {
+    (deps.logger ?? silentLogger).log("info", "corridor.quote.supplied", {
+      idempotencyKey: run.idempotencyKey,
+      corridorId: corridor.id,
+      quoteId: q.value.id,
+    });
+  }
   run.quoteId = q.value.id;
   run.quoteExpiresAt = q.value.expiresAt;
   run.quoteFirm = q.value.firm;
   run.priceLabel = q.value.firm ? "locked" : "indicative";
   run.settlementAmount = q.value.sourceAmount.amount;
   {
-    const t = await advance("quoted");
+    const t = await advance("quoted", quoteSupplied ? { quoteSupplied: true } : undefined);
     if (!t.ok) return die(t.error);
   }
 
@@ -971,6 +981,8 @@ interface AdvanceMeta {
   amountRefunded?: string;
   amountFee?: string;
   checks?: readonly CheckResult[];
+  /** The run's quote came from `ExecuteOptions.quote` instead of the anchor (#622). */
+  quoteSupplied?: boolean;
   /** Set by `advance` itself on the first transition out of `created`. */
   route?: RouteChoice;
 }
@@ -1307,6 +1319,7 @@ async function emitTransition(
     amountRefunded?: string;
     amountFee?: string;
     checks?: readonly CheckResult[];
+    quoteSupplied?: boolean;
     route?: RouteChoice;
   },
 ): Promise<void> {
@@ -1323,6 +1336,7 @@ async function emitTransition(
     ...(meta?.networkFee && { networkFee: meta.networkFee }),
     ...(meta?.amountRefunded !== undefined && { amountRefunded: meta.amountRefunded }),
     ...(meta?.amountFee !== undefined && { amountFee: meta.amountFee }),
+    ...(meta?.quoteSupplied && { quoteSupplied: true }),
     // A copy, so a caller mutating its array afterwards cannot change what was recorded.
     ...(meta?.checks && meta.checks.length > 0 && { checks: [...meta.checks] }),
     ...(meta?.route && { route: meta.route }),

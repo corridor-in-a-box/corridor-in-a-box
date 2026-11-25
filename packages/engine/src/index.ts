@@ -79,6 +79,26 @@ export {
   type OutlierVerdict,
 } from "./rate-outliers";
 export {
+  DEX_TRADE_RESOLUTION_15M,
+  HORIZON_MAX_LIMIT,
+  assertDexPair,
+  buildTradeAggregationsUrl,
+  collectDexTrades,
+  collectDexTradesForPair,
+  defaultHorizonUrl,
+  fetchTradeAggregations,
+  horizonAssetParams,
+  loadDexPairsConfig,
+  parseDexPairsConfig,
+  tradeAggregationsToSamples,
+  type CollectDexTradesOptions,
+  type DexPairConfig,
+  type DexPairResult,
+  type HorizonTradeAggregationRecord,
+  type HorizonTradeAggregationsResponse,
+  type RateSampleSink,
+} from "./rate-collector-dex";
+export {
   UnimplementedSubmitter,
   createMockSubmitter,
   StellarPaymentStrategy,
