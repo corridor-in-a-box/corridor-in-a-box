@@ -86,6 +86,11 @@ IMAGE_DISTRIBUTION_ACCOUNT="GBN4NNCDGJO4XW4KQU3CBIESUJWFVBUZPOKUZHT7W7WRB7CWOA7B
 DISTRIBUTION_ACCOUNT="${DISTRIBUTION_ACCOUNT:-}"
 DISTRIBUTION_SECRET="${DISTRIBUTION_SECRET:-}"
 BRIDGE_ASSET_ISSUER="${BRIDGE_ASSET_ISSUER:-GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5}"
+# The image advertises a SEP-31 minimum of 0 for the bridge asset, so no payment
+# is ever below it. SEND_MIN_AMOUNT=<whole number> raises it on `up`, for the
+# limits scenario in docs/operations.md. Whole units: the platform holds limits
+# as integers. Unset leaves the (cached) config as it is.
+SEND_MIN_AMOUNT="${SEND_MIN_AMOUNT:-}"
 # The Kotlin reference server (business logic, :8091) and how often
 # `payout-watch` looks for transactions waiting on it.
 REF_URL="${REF_URL:-http://localhost:8091}"
@@ -96,6 +101,8 @@ PLATFORM_API_URL="${PLATFORM_API_URL:-http://localhost:8085}"
 # How long a `faults` run waits for the payment it is meant to break.
 FAULT_TIMEOUT_SECS="${FAULT_TIMEOUT_SECS:-900}"
 FAULT_POLL_SECS="${FAULT_POLL_SECS:-1}"
+# How long `faults outage=N` waits for ap-sep to serve again after restarting it.
+OUTAGE_READY_SECS="${OUTAGE_READY_SECS:-600}"
 # Which payment to break. Empty: the next one opened after the fault is armed.
 # FAULT_TX_ID pins one SEP-31 transaction; FAULT_AMOUNT picks by amount_in.
 FAULT_TX_ID="${FAULT_TX_ID:-}"
@@ -162,6 +169,51 @@ apply_distribution_override() {
   grep -rqF "$DISTRIBUTION_ACCOUNT" "$CONFIG_DIR" \
     || die "config in $CONFIG_DIR names neither the image's distribution account nor $DISTRIBUTION_ACCOUNT; delete $CONFIG_DIR and re-run"
   log "anchor receives on $DISTRIBUTION_ACCOUNT (overrides the image's shared account)"
+}
+
+# Set the bridge asset's SEP-31 `send.min_amount` to SEND_MIN_AMOUNT. The image
+# lists two USDC entries; only the one issued by BRIDGE_ASSET_ISSUER is touched,
+# because that is the one SEP-31 /info advertises and POST /transactions checks.
+apply_send_min_amount() {
+  [ -n "$SEND_MIN_AMOUNT" ] || return 0
+  require_uint SEND_MIN_AMOUNT "$SEND_MIN_AMOUNT"
+  local f="" c tmp
+  # The assets file: a top-level `assets:` list naming the issuer.
+  for c in $(grep -rlF "issuer: $BRIDGE_ASSET_ISSUER" "$CONFIG_DIR" 2>/dev/null || true); do
+    if grep -q '^assets:' "$c"; then f="$c"; break; fi
+  done
+  [ -n "$f" ] || die "no assets file listing $BRIDGE_ASSET_ISSUER in $CONFIG_DIR; cannot set SEND_MIN_AMOUNT"
+  tmp="$f.tmp"
+  # Buffer one `  - ` asset entry at a time, so the issuer line may sit anywhere
+  # in it; rewrite (or add) `min_amount` under that entry's `send:` block only.
+  awk -v issuer="$BRIDGE_ASSET_ISSUER" -v min="$SEND_MIN_AMOUNT" '
+    function emit(   i, hit, insend, done, line) {
+      hit = 0
+      for (i = 1; i <= nb; i++)
+        if (buf[i] ~ ("^[[:space:]]+issuer:[[:space:]]*" issuer "[[:space:]]*$")) hit = 1
+      insend = 0; done = 0
+      for (i = 1; i <= nb; i++) {
+        line = buf[i]
+        if (hit) {
+          if (insend && line !~ /^      /) {
+            if (!done) { print "      min_amount: " min; done = 1 }
+            insend = 0
+          }
+          if (line ~ /^    send:[[:space:]]*$/) insend = 1
+          else if (insend && line ~ /^      min_amount:/) { line = "      min_amount: " min; done = 1 }
+        }
+        print line
+      }
+      if (hit && insend && !done) { print "      min_amount: " min; done = 1 }
+      if (done) found = 1
+      nb = 0
+    }
+    /^  - / || /^[^[:space:]]/ { emit() }
+    { buf[++nb] = $0 }
+    END { emit(); if (!found) exit 3 }
+  ' "$f" >"$tmp" || { rm -f "$tmp"; die "could not find a send: block for $BRIDGE_ASSET_ISSUER in $f"; }
+  mv "$tmp" "$f"
+  log "SEP-31 send.min_amount for $BRIDGE_ASSET_ISSUER set to $SEND_MIN_AMOUNT"
 }
 
 # The account the running config receives payments on: the first
@@ -235,6 +287,7 @@ up() {
     log "config extracted to $CONFIG_DIR"
   fi
   apply_distribution_override
+  apply_send_min_amount
 
   # SEP + platform servers. This is what actually serves :8080.
   if ! podman container exists ap-sep 2>/dev/null; then
@@ -494,6 +547,7 @@ payout_watch() {
 #   scripts/reference-anchor.sh faults ask-info
 #   scripts/reference-anchor.sh faults refund
 #   scripts/reference-anchor.sh faults quote-expiry=1
+#   scripts/reference-anchor.sh faults outage=45
 #
 # scripts/fault-scenario.sh runs a whole corridor under one of these, and is
 # what .github/workflows/reference-corridor.yml exercises live.
@@ -511,6 +565,9 @@ payout_watch() {
 #                  allows; the engine observes it and never asks for it
 #   quote-expiry=N make every quote issued from now on expire N seconds after
 #                  issuance
+#   outage=N       take the anchor's SEP and platform servers (ap-sep) down for
+#                  N seconds once it holds the payment's funds, bring them back,
+#                  then pay out as payout-watch would
 #
 # `faults` plays the anchor operator like `payout-watch` does, so a faulted run
 # uses one or the other, never both: `faults` only moves a transaction whose
@@ -518,13 +575,15 @@ payout_watch() {
 #
 # How each is applied, and why none of it is a fork:
 #   reject/refund  the platform server's JSON-RPC business-server API
-#                  (POST :8085/transactions — notify_transaction_error and
+#                  (POST :8085/ — notify_transaction_error and
 #                  notify_refund_sent), the same interface the Kotlin reference
 #                  server itself calls to progress a transaction.
 #   delay          the reference server's test-only process endpoint, exactly as
 #                  payout-watch calls it, just later.
 #   ask-info       the platform has no RPC for it in 2.x, so this writes the
 #                  status the platform reads back on GET /transactions/:id.
+#   outage         `podman stop` / `podman start` of ap-sep: the anchor really
+#                  stops answering, rather than a proxy pretending it did.
 #   quote-expiry   the reference server computes a quote's expiry itself
 #                  (tomorrow noon UTC) and no config shortens it, so a trigger
 #                  on the platform's quote table rewrites it at insert time.
@@ -584,7 +643,9 @@ platform_auth_args() {
 platform_rpc() {
   local body res
   body="[{\"id\":1,\"jsonrpc\":\"2.0\",\"method\":\"$1\",\"params\":$2}]"
-  res="$(curl -fsS --max-time 15 -X POST "$PLATFORM_API_URL/transactions" \
+  # The RPC controller is mapped at the API's root (PlatformRpcController in
+  # Anchor Platform 2.x); /transactions is the REST resource and refuses POST.
+  res="$(curl -fsS --max-time 15 -X POST "$PLATFORM_API_URL/" \
     -H 'content-type: application/json' ${PLATFORM_AUTH[@]+"${PLATFORM_AUTH[@]}"} \
     -d "$body" 2>&1)" || { printf '%s' "$res" >&2; return 1; }
   case "$res" in
@@ -614,8 +675,12 @@ fault_predicate() {
     parts+=("status = 'pending_receiver'")
   fi
   [ -z "$FAULT_AMOUNT" ] || parts+=("amount_in = '$FAULT_AMOUNT'")
-  local IFS=' AND '
-  printf '%s' "${parts[*]}"
+  # Joined by hand: "${parts[*]}" joins with only the FIRST character of IFS,
+  # so IFS=' AND ' produced "... >= N status = ..." — invalid SQL that psql's
+  # error (discarded below) turned into "no payment yet", forever.
+  local out="${parts[0]}" p
+  for p in "${parts[@]:1}"; do out="$out AND $p"; done
+  printf '%s' "$out"
 }
 
 # Both waiters put their row in FAULT_ROW and run in THIS shell: inside
@@ -659,14 +724,14 @@ wait_for_short_quote() {
 faults() {
   local spec kind value row id status amount asset fee fee_asset
   spec="${1:-${ANCHOR_FAULTS:-}}"
-  [ -n "$spec" ] || die "usage: $0 faults <delay=SECONDS|reject|ask-info|refund|quote-expiry=SECONDS>"
+  [ -n "$spec" ] || die "usage: $0 faults <delay=SECONDS|reject|ask-info|refund|quote-expiry=SECONDS|outage=SECONDS>"
   kind="${spec%%=*}"
   value=""
   case "$spec" in *=*) value="${spec#*=}" ;; esac
   case "$kind" in
-    delay|quote-expiry) require_uint "$kind" "$value" ;;
+    delay|quote-expiry|outage) require_uint "$kind" "$value" ;;
     reject|ask-info|refund) [ -z "$value" ] || die "$kind takes no value (got \"$value\")" ;;
-    *) die "unknown fault \"$spec\" (delay=SECONDS|reject|ask-info|refund|quote-expiry=SECONDS)" ;;
+    *) die "unknown fault \"$spec\" (delay=SECONDS|reject|ask-info|refund|quote-expiry=SECONDS|outage=SECONDS)" ;;
   esac
   case "$FAULT_TX_ID" in *[!A-Za-z0-9_-]*) die "FAULT_TX_ID must be letters, digits, '_' or '-'" ;; esac
   case "$FAULT_AMOUNT" in *[!0-9.]*) die "FAULT_AMOUNT must be a decimal amount" ;; esac
@@ -718,7 +783,7 @@ faults() {
       # suppresses "UPDATE 1", so matching that text could never succeed.
       row="$(psql_platform -t -A -c "UPDATE sep31_transaction
         SET status = 'pending_customer_info_update',
-            message = 'corridor fault: updated customer information required',
+            required_info_message = 'corridor fault: updated customer information required',
             updated_at = now()
         WHERE id = '$id'
         RETURNING id;")" || row=""
@@ -735,6 +800,41 @@ faults() {
         "{\"transaction_id\":\"$id\",\"message\":\"corridor fault: refunded\",\"refund\":{\"id\":\"refund-$id\",\"amount\":{\"amount\":\"$amount\",\"asset\":\"$asset\"},\"amount_fee\":{\"amount\":\"${fee:-0}\",\"asset\":\"$fee_asset\"}}}" \
         || die "the platform refused the refund for $id (see its response above)"
       log "refund: $id is now refunded ($amount $asset)"
+      ;;
+    outage)
+      # The funds are on chain and the engine is polling: the anchor goes
+      # away now, mid-flow. ap-sep is both the SEP server the engine talks to
+      # and the platform API the payout goes through, so nothing can move this
+      # payment until it is back.
+      log "outage: stopping ap-sep with $id in flight, for ${value}s"
+      podman stop -t 10 ap-sep >/dev/null || die "could not stop ap-sep"
+      sleep "$value"
+      log "outage: starting ap-sep again"
+      podman start ap-sep >/dev/null \
+        || die "could not restart ap-sep; the anchor is still down (scripts/reference-anchor.sh down && up)"
+      # Its own budget, not READY_TIMEOUT_SECS: a restart under load can take
+      # several minutes, and giving up here leaves the payment unpaid.
+      local back=$((SECONDS + OUTAGE_READY_SECS)) now_status=""
+      # Both servers in ap-sep: SEP (:8080) for the engine, and the platform
+      # API (:8085) the reference server pays out through. Any HTTP answer from
+      # the latter will do; it is the connection that matters.
+      until curl -fsS --max-time 3 "$SEP_URL/.well-known/stellar.toml" >/dev/null 2>&1 \
+        && curl -sS --max-time 3 -o /dev/null "$PLATFORM_API_URL/" 2>/dev/null; do
+        [ "$SECONDS" -lt "$back" ] || die "ap-sep did not serve again within ${OUTAGE_READY_SECS}s"
+        sleep 2
+      done
+      log "outage: the anchor is serving again"
+      # Pay out the way payout-watch does. The reference server answers 200 even
+      # when its call into the platform fails, so the platform's own record is
+      # the proof: retry until the transaction has left pending_receiver.
+      while :; do
+        curl -fsS --max-time 10 -X POST "$REF_URL/sep31/transactions/$id/process" >/dev/null 2>&1 || true
+        sleep 3
+        now_status="$(psql_platform -c "SELECT status FROM sep31_transaction WHERE id = '$id';" 2>/dev/null | tr -d '[:space:]')" || now_status=""
+        [ -z "$now_status" ] || [ "$now_status" = "pending_receiver" ] || break
+        [ "$SECONDS" -lt "$back" ] || die "the payout for $id never went through after the outage (status: ${now_status:-unknown})"
+      done
+      log "outage: payout released for $id after the anchor came back (status: $now_status)"
       ;;
   esac
   exit 0

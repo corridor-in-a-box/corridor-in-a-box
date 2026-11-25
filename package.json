@@ -41,6 +41,7 @@
     "load-test": "tsx examples/load-test.ts",
     "verify:quote-expiry": "tsx examples/verify-quote-expiry.ts",
     "verify:crash-resume": "tsx examples/verify-crash-resume.ts",
+    "verify:scenario-limits": "tsx examples/verify-scenario-limits.ts",
     "fund:testnet": "tsx examples/fund-testnet-sender.ts",
     "prepare:distribution": "tsx examples/prepare-reference-distribution.ts",
     "probe:anchor": "tsx examples/probe-anchor.ts",
