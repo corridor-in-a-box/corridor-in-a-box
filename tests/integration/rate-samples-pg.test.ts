@@ -193,6 +193,43 @@ run("Postgres rate history schema and store (live Postgres)", () => {
     ]);
   });
 
+  it("flags a spike on record against the series' earlier samples, and can unflag it (#602)", async () => {
+    const t0 = Date.parse("2026-11-19T10:00:00Z");
+    for (const [i, rate] of ["5.44", "5.45", "5.46"].entries()) {
+      await store().recordFlaggingOutliers(sep38({ rate, sampledAt: t0 + i * 900_000 }));
+    }
+    // Another network's series is not part of this one's baseline.
+    await store().record(
+      sep38({ network: "testnet", rate: "54.5", sampledAt: t0 + 2_000_000 }),
+    );
+
+    const spike = await store().recordFlaggingOutliers(
+      sep38({ rate: "54.5", sampledAt: t0 + 2_700_000 }),
+    );
+    expect(spike).toEqual({
+      stored: true,
+      verdict: { outlier: true, median: "5.45", deviationBps: 90_000, baselineSize: 3 },
+    });
+    const ok = await store().recordFlaggingOutliers(
+      sep38({ rate: "5.47", sampledAt: t0 + 3_600_000 }),
+    );
+    expect(ok.verdict.outlier).toBe(false);
+
+    const rows = await store().list({ network: "public" });
+    expect(rows.map((r) => [r.rate, r.outlier])).toEqual([
+      ["5.47", false],
+      ["54.5", true],
+      ["5.46", false],
+      ["5.45", false],
+      ["5.44", false],
+    ]);
+
+    const flagged = rows.find((r) => r.outlier)!;
+    expect(await store().setOutlier(flagged.id, false)).toBe(true);
+    expect((await store().list({ network: "public", excludeOutliers: true })).length).toBe(5);
+    expect(await store().setOutlier("999999999", true)).toBe(false);
+  });
+
   it("refuses rows that break the schema's rules, even bypassing the store", async () => {
     const insert = (cols: Record<string, unknown>) => {
       const keys = Object.keys(cols);

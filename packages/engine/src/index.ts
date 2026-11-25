@@ -70,6 +70,36 @@ export {
   type ListRateDailySummariesFilter,
 } from "./rate-samples-pg";
 export {
+  checkOutlier,
+  flagOutliers,
+  medianRate,
+  DEFAULT_OUTLIER_THRESHOLD_BPS,
+  DEFAULT_OUTLIER_WINDOW,
+  DEFAULT_OUTLIER_MIN_BASELINE,
+  type OutlierPolicy,
+  type OutlierVerdict,
+} from "./rate-outliers";
+export {
+  DEX_TRADE_RESOLUTION_15M,
+  HORIZON_MAX_LIMIT,
+  assertDexPair,
+  buildTradeAggregationsUrl,
+  collectDexTrades,
+  collectDexTradesForPair,
+  defaultHorizonUrl,
+  fetchTradeAggregations,
+  horizonAssetParams,
+  loadDexPairsConfig,
+  parseDexPairsConfig,
+  tradeAggregationsToSamples,
+  type CollectDexTradesOptions,
+  type DexPairConfig,
+  type DexPairResult,
+  type HorizonTradeAggregationRecord,
+  type HorizonTradeAggregationsResponse,
+  type RateSampleSink,
+} from "./rate-collector-dex";
+export {
   UnimplementedSubmitter,
   createMockSubmitter,
   StellarPaymentStrategy,

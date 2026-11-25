@@ -237,6 +237,13 @@ export type {
   RateSample,
 } from "./estimated-price";
 export {
+  canonicalDecimal,
+  compareDecimals,
+  percentile,
+  percentileRank,
+  windowed,
+} from "./rate-percentile";
+export {
   DEFAULT_ESTIMATE_MARGIN_BPS,
   applyEstimateMargin,
   fetchIndicativePrice,
