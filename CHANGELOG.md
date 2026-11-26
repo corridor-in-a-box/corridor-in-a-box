@@ -7,6 +7,22 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
+### Added — Published history of nightly reference runs ([#680](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/680))
+
+- Each nightly `reference-corridor` run is recorded in `web/lib/generated/reference-runs.json`:
+  run id, date, outcome (`success`, `failure` or `cancelled`), duration, the state trail, the
+  settle tx hashes and the run's URL. Newest first, capped at 180 runs. Failed and cancelled
+  runs are recorded too, a re-run replaces its own record, and a corrupt history stops the
+  writer instead of being overwritten.
+- `pnpm record:reference-run` (`scripts/record-reference-run.ts`, `scripts/reference-runs.ts`)
+  writes it. `web/lib/reference-runs.ts` reads it: the list, the latest run (the same source as
+  the #586 dashboard panel) and a success-rate and duration summary.
+- The workflow commits it from a separate `publish-history` job (`needs: corridor`,
+  `if: always()`, `permissions: contents: write`) that reads no secrets and runs no
+  `pnpm install`. The `corridor` job keeps `CORRIDOR_SIGNER_SECRET` on its verify step, is
+  read-only, keeps the runner's real exit status through `tee`, and hands the run's facts over
+  as an artifact. Documented in `docs/operations.md`.
+
 ### Added — Fall back to the next route before funds move ([#626](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/626))
 
 - When the primary route fails before any funds move (a refused quote, a KYC rejection, or a
