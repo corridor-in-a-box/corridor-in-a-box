@@ -45,6 +45,7 @@
     "verify:scenario-limits": "tsx examples/verify-scenario-limits.ts",
     "fund:testnet": "tsx examples/fund-testnet-sender.ts",
     "prepare:distribution": "tsx examples/prepare-reference-distribution.ts",
+    "record:reference-run": "tsx scripts/record-reference-run.ts",
     "probe:anchor": "tsx examples/probe-anchor.ts",
     "probe:sweep": "tsx examples/sweep-anchors.ts",
     "registry:read": "tsx examples/read-registry.ts",
