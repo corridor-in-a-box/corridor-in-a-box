@@ -15,6 +15,10 @@
 //                 last 24 hours of complete 15-minute buckets. Writes `dex_trade` samples.
 //                 Re-reading buckets already stored is a no-op, so a restart or a missed
 //                 run backfills without duplicating anything.
+//   rate_pruning  `createPruningCollectorStep` (#599). Once per UTC day, deletes raw samples
+//                 older than RATE_RETENTION_DAYS whole days (default 90, at least 7), in
+//                 batches, and only for days whose daily summary has been written. Daily
+//                 summaries are never deleted.
 //
 // Every sample goes through `PostgresRateHistoryStore.recordFlaggingOutliers` (#602), so an
 // outlier is stored but flagged. A step with nothing to read (no registry and no anchors
@@ -34,6 +38,7 @@
 //   RATE_COLLECTOR_INTERVAL_SECONDS=900          # alternative to the above
 //   RATE_COLLECTOR_JITTER_MS=5000                # 0 to 5 seconds jitter (default)
 //   RATE_COLLECTOR_RUN_ON_START=1                # run on startup (default 1)
+//   RATE_RETENTION_DAYS=90                       # days of raw samples kept (default 90, min 7)
 
 import { readFileSync } from "node:fs";
 import { isAbsolute } from "node:path";
@@ -46,10 +51,12 @@ import {
   DEX_TRADE_RESOLUTION_15M,
   collectDexTrades,
   consoleLogger,
+  createPruningCollectorStep,
   loadDexPairsConfig,
   migrate,
   parseCollectorInterval,
   parseCollectorJitter,
+  parseRetentionDays,
   pollSep38Prices,
   type CollectorStep,
   type DexPairConfig,
@@ -183,6 +190,8 @@ async function main(): Promise<void> {
   );
   const dexPairs = loadDexPairsConfig(dexPairsPath);
   const registry = registryFor(network);
+  // Checked before connecting, so a bad value stops the process with a clear error.
+  const retentionDays = parseRetentionDays(process.env.RATE_RETENTION_DAYS);
 
   const { Pool } = await import("pg");
   const pool = new Pool({ connectionString: databaseUrl });
@@ -211,6 +220,9 @@ async function main(): Promise<void> {
     console.error("✗ nothing to collect: configure a SEP-38 source or DEX pairs");
     process.exit(2);
   }
+  // Pruning collects nothing, so it is added after the check above. It does work only on the
+  // first tick of each UTC day.
+  steps.push(createPruningCollectorStep(pool, { retentionDays, logger: consoleLogger }));
 
   const loop = new RateCollectorLoop({
     intervalMs,
@@ -228,6 +240,7 @@ async function main(): Promise<void> {
     `  network:     ${network} (SEP-38 registry: ${registry ? "on-chain" : "none"})`,
   );
   console.log(`  dex pairs:   ${dexPairs.length} from ${dexPairsPath}`);
+  console.log(`  retention:   ${retentionDays} days of raw samples (pruned daily)`);
   console.log(`  steps:       ${steps.map((s) => s.name).join(", ")}\n`);
 
   for (const sig of ["SIGTERM", "SIGINT"] as const) {

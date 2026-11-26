@@ -3,3 +3,6 @@
 /out
 next-env.d.ts
 *.tsbuildinfo
+# Playwright: build outputs of a failing run, not source.
+/.playwright-output
+/test-results

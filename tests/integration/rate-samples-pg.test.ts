@@ -16,8 +16,11 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   PostgresRateHistoryStore,
+  createPruningCollectorStep,
   migrate,
+  pruneRateSamples,
   type Queryable,
+  type RateDailySummary,
   type RateSampleInput,
 } from "@corridor/engine";
 
@@ -311,5 +314,135 @@ run("Postgres rate history schema and store (live Postgres)", () => {
         [USDC],
       ),
     ).rejects.toThrow();
+  });
+
+  describe("retention and pruning (#599)", () => {
+    // Retention 7 days at noon on 2026-11-21: the cutoff is 2026-11-14T00:00:00Z.
+    const NOW = Date.parse("2026-11-21T12:00:00Z");
+    const db = () => pool as unknown as Queryable;
+
+    const summarise = (over: Partial<RateDailySummary>) =>
+      store().upsertDailySummary({
+        network: "public",
+        sellAsset: USDC,
+        buyAsset: "iso4217:BRL",
+        source: "sep38_price",
+        anchorDomain: "ntokens.com",
+        day: "2026-11-10",
+        sampleCount: 1,
+        minRate: "5.45",
+        p25Rate: "5.45",
+        medianRate: "5.45",
+        p75Rate: "5.45",
+        maxRate: "5.45",
+        ...over,
+      });
+
+    const dex = (sampledAt: string): RateSampleInput => ({
+      network: "public",
+      sellAsset: USDC,
+      buyAsset: "stellar:native",
+      source: "dex_trade",
+      rate: "8.1",
+      sampledAt: Date.parse(sampledAt),
+    });
+
+    const remaining = async () =>
+      (await store().list())
+        .map(
+          (r) =>
+            `${r.network} ${r.source} ${r.anchorDomain ?? "-"} ${new Date(r.sampledAt).toISOString()}`,
+        )
+        .sort();
+
+    it("deletes old samples only for summarised series-days and never touches summaries", async () => {
+      // Old and summarised: pruned.
+      await store().record(sep38({ sampledAt: Date.parse("2026-11-10T10:00:00Z") }));
+      await store().record(sep38({ sampledAt: Date.parse("2026-11-13T23:59:59.999Z") }));
+      await store().record(dex("2026-11-10T10:00:00Z"));
+      // Old, but its day has no summary: THE GUARD keeps it.
+      await store().record(sep38({ sampledAt: Date.parse("2026-11-11T23:59:59.999Z") }));
+      // Old, same day as a summary, but another anchor's or another network's series: kept.
+      await store().record(
+        sep38({
+          anchorDomain: "other.example",
+          sampledAt: Date.parse("2026-11-10T11:00:00Z"),
+        }),
+      );
+      await store().record(
+        sep38({ network: "testnet", sampledAt: Date.parse("2026-11-10T11:00:00Z") }),
+      );
+      // Summarised, but not older than the cutoff: kept.
+      await store().record(sep38({ sampledAt: Date.parse("2026-11-14T00:00:00Z") }));
+
+      await summarise({ day: "2026-11-10" });
+      await summarise({ day: "2026-11-13" });
+      await summarise({ day: "2026-11-14" });
+      await summarise({
+        day: "2026-11-10",
+        source: "dex_trade",
+        anchorDomain: null,
+        buyAsset: "stellar:native",
+      });
+
+      // Recorded after its day was summarised, so the summary does not include it: kept.
+      await pool.query(
+        `insert into rate_samples (network, sell_asset, buy_asset, source, anchor_domain, rate, sampled_at, recorded_at)
+         values ('public', $1, 'iso4217:BRL', 'sep38_price', 'ntokens.com', '5.5', '2026-11-10T12:00:00Z', now() + interval '1 minute')`,
+        [USDC],
+      );
+
+      const result = await pruneRateSamples(db(), {
+        retentionDays: 7,
+        batchSize: 1,
+        now: () => NOW,
+      });
+      expect(result).toMatchObject({
+        cutoff: "2026-11-14T00:00:00.000Z",
+        rowsDeleted: 3,
+        batches: 4,
+        complete: true,
+      });
+      expect(await remaining()).toEqual(
+        [
+          "public sep38_price ntokens.com 2026-11-10T12:00:00.000Z",
+          "public sep38_price ntokens.com 2026-11-11T23:59:59.999Z",
+          "public sep38_price ntokens.com 2026-11-14T00:00:00.000Z",
+          "public sep38_price other.example 2026-11-10T11:00:00.000Z",
+          "testnet sep38_price ntokens.com 2026-11-10T11:00:00.000Z",
+        ].sort(),
+      );
+      expect(result.blocked.map((b) => [b.network, b.anchorDomain, b.day, b.samples])).toEqual(
+        [
+          ["public", "ntokens.com", "2026-11-10", 1],
+          ["public", "other.example", "2026-11-10", 1],
+          ["testnet", "ntokens.com", "2026-11-10", 1],
+          ["public", "ntokens.com", "2026-11-11", 1],
+        ],
+      );
+      expect(await store().listDailySummaries()).toHaveLength(4);
+
+      // A second pass finds nothing more to delete.
+      const again = await pruneRateSamples(db(), { retentionDays: 7, now: () => NOW });
+      expect(again).toMatchObject({ rowsDeleted: 0, batches: 1, complete: true });
+    });
+
+    it("prunes a day once its summary is written", async () => {
+      await store().record(sep38({ sampledAt: Date.parse("2026-11-01T09:00:00Z") }));
+      const step = createPruningCollectorStep(db(), { retentionDays: 7, now: () => NOW });
+      expect(await step.run()).toMatchObject({ pruned: 0, blocked: 1 });
+      expect(await store().list()).toHaveLength(1);
+
+      await summarise({ day: "2026-11-01" });
+      // Same UTC day: the step has already run today.
+      expect(await step.run()).toMatchObject({ skipped: true });
+      const tomorrow = createPruningCollectorStep(db(), {
+        retentionDays: 7,
+        now: () => NOW + 86_400_000,
+      });
+      expect(await tomorrow.run()).toMatchObject({ pruned: 1, blocked: 0 });
+      expect(await store().list()).toHaveLength(0);
+      expect(await store().listDailySummaries()).toHaveLength(1);
+    });
   });
 });
