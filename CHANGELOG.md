@@ -7,6 +7,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
+### Added — router ranking function ([#611](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/611))
+
+- `rank(options, { estimateMarginBps })` in `@corridor/router` orders route options per RFC 0004
+  §1 "Ranking": by the cautious recipient amount, then reliability, then delivery time, then
+  receiving domain, with no hidden weights. It is pure: it returns a new array and never
+  changes its input, and options equal on every key keep their input order.
+- The cautious amount comes from the price label: a `locked` amount as quoted, an `indicative`
+  or `estimated` (P25) amount minus the estimate margin (default 50 bps, RFC 0004 D3).
+  `cautiousRecipientAmount` exposes that step. Amounts stay decimal strings on scaled BigInts.
+- Domains compare by code unit, so the order is the same under every locale. A malformed or
+  negative amount, an unknown label, a reliability outside 0..1 or options in different assets
+  throw a `RangeError` instead of ranking silently wrong.
+- A full `RouteOption` can be ranked directly. Property tests use the repo's seeded generator:
+  the result is a permutation of the input and stable for equal inputs.
+
 ### Added — estimate gap when a business guarantees estimated prices ([#627](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/627))
 
 - With `guaranteeEstimates` on (`EngineDeps` or `ExecuteOptions`, RFC 0004 D4), the engine

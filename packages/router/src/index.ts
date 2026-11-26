@@ -274,3 +274,8 @@ export type {
   ReliabilityRunOutcome,
   ReliabilityRunStore,
 } from "./reliability";
+
+// RFC 0004 ranking: cautious recipient amount per label, then reliability,
+// then speed, then domain. Pure and deterministic.
+export { rank, cautiousRecipientAmount } from "./rank";
+export type { RankableOption, RankOptions } from "./rank";
