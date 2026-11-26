@@ -19,6 +19,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   (at least 7 days of data and 100 samples in the last 7 days), with the counts behind it.
 - With no source configured, an unreadable source, or no data for a pair, the chart shows an
   empty state and no numbers.
+
 ### Added — rate history minimum-data rule for estimated prices ([#598](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/598))
 
 - `@corridor/router` exports `assessRateHistory` (`packages/router/src/rate-history.ts`): given the
