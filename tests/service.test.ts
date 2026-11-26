@@ -3,17 +3,30 @@ import { request, type Server } from "node:http";
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { parseCorridor, type Corridor } from "@corridor/manifest";
-import { createMockAdapter } from "@corridor/adapter-kit";
-import { StaticRouteResolver, UnattestedAnchorError } from "@corridor/router";
+import { createMockAdapter, type AnchorAdapter } from "@corridor/adapter-kit";
+import {
+  StaticRouteResolver,
+  UnattestedAnchorError,
+  type AttestationSource,
+  type RateSample,
+} from "@corridor/router";
+import { describePlannerContract } from "@corridor/router/testing";
 import {
   InMemoryAuditLog,
+  InMemoryCorridorHealthStore,
   InMemoryIdempotencyStore,
   createMockSubmitter,
   type EngineDeps,
   type Logger,
 } from "@corridor/engine";
-import { createService, gracefulShutdown, type ServiceOptions } from "@corridor/service";
-import type { CorridorErrorCode, PaymentIntent } from "@corridor/types";
+import {
+  createService,
+  gracefulShutdown,
+  type RoutePlan,
+  type RoutePlanningOptions,
+  type ServiceOptions,
+} from "@corridor/service";
+import { fail, ok, type CorridorErrorCode, type PaymentIntent } from "@corridor/types";
 
 function corridor(): Corridor {
   const r = parseCorridor({
@@ -1028,4 +1041,438 @@ describe("service: GET /payments/:key route and price metadata (#629)", () => {
       price: { label: "estimated" },
     });
   });
+});
+
+describe("service: POST /routes (RFC 0004 route planning, #617)", () => {
+  const AMOUNT = { asset: "USDC", amount: "100.00" };
+  const BODY = { sourceAmount: AMOUNT, destAsset: "iso4217:ARS", destCountry: "AR" };
+
+  /** A proven ARS lane to `domain`, attested or not depending on the registry fake. */
+  function lane(
+    id: string,
+    domain: string,
+    endpoints: Record<string, string> = {},
+    over: Record<string, unknown> = {},
+  ): Corridor {
+    const r = parseCorridor({
+      id,
+      source: { name: "S", asset: "USDC", endpoints: { home_domain: "s.example" } },
+      dest: {
+        name: id,
+        asset: "iso4217:ARS",
+        endpoints: {
+          home_domain: domain,
+          transfer_server_sep31: `https://${domain}/sep31`,
+          endpoints_verified_at: "1970-01-01",
+          ...endpoints,
+        },
+      },
+      fx: { path: ["ARS", "USDC", "ARS"], who_holds_risk: "receiving_anchor" },
+      compliance: { source_jurisdiction: "AR", dest_jurisdiction: "AR" },
+      settlement: { network: "public", asset_issuer: "GISSUER" },
+      recovery: {},
+      proof: {
+        canary_completed_at: "1970-01-01T00:00:00Z",
+        stellar_tx_hash: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+        anchor_transaction_id: "canary-test",
+        amount: "1",
+        max_age_days: 50000,
+      },
+      ...over,
+    });
+    if (!r.ok) throw new Error(`fixture ${id} invalid: ${r.error.message}`);
+    return r.value;
+  }
+
+  /** Registry fake: only `attested` domains serve, every attestation is fresh. */
+  function registry(attested: readonly string[]): AttestationSource {
+    return {
+      serves: async (domain) => attested.includes(domain),
+      staleness: async () => 0,
+      tomlHash: async () => "hash",
+    };
+  }
+
+  /** An adapter whose firm quote pays `destAmount` ARS for 100 USDC. */
+  function quoting(destAmount: string, fee?: string): AnchorAdapter {
+    return {
+      ...createMockAdapter(),
+      async requestQuote(intent) {
+        return ok({
+          id: `q-${destAmount}`,
+          price: "90",
+          expiresAt: Date.now() + 60_000,
+          sourceAmount: intent.sourceAmount,
+          destAmount: { asset: "iso4217:ARS", amount: destAmount },
+          ...(fee ? { fee: { asset: "USDC", amount: fee } } : {}),
+          firm: true,
+        });
+      },
+    };
+  }
+
+  /** An adapter that offers no firm quote, so the planner falls back. */
+  const refusing: AnchorAdapter = {
+    ...createMockAdapter(),
+    async requestQuote() {
+      return fail("QUOTE_UNAVAILABLE", "no firm quotes here");
+    },
+  };
+
+  /** SEP-38 GET /price fake: 100 USDC buys `buyAmount` ARS. Records what was asked. */
+  function priceFeed(buyAmount: string, asked: string[] = []): typeof fetch {
+    return (async (url: string | URL | Request) => {
+      asked.push(String(url));
+      return new Response(JSON.stringify({ sell_amount: "100.00", buy_amount: buyAmount }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+  }
+
+  // a.example: firm quote of 9000 ARS (locked).
+  // b.example: no firm quote, GET /price says 9100 ARS (indicative).
+  // u.example: not attested.
+  function corridors(): Map<string, Corridor> {
+    return new Map([
+      ["lane-a", lane("lane-a", "a.example")],
+      ["lane-b", lane("lane-b", "b.example", { quote_server: "https://b.example/sep38" })],
+      ["lane-u", lane("lane-u", "u.example")],
+    ]);
+  }
+
+  function planning(over: Partial<RoutePlanningOptions> = {}): RoutePlanningOptions {
+    return {
+      registry: registry(["a.example", "b.example"]),
+      adapterFor: (c) =>
+        c.dest.endpoints.home_domain === "a.example" ? quoting("9000", "1") : refusing,
+      fetch: priceFeed("9100"),
+      ...over,
+    };
+  }
+
+  function planner(
+    over: Partial<RoutePlanningOptions> = {},
+    service: Partial<ServiceOptions> = {},
+  ) {
+    return createService({
+      corridors: corridors(),
+      deps: deps(),
+      routePlanning: planning(over),
+      ...service,
+    });
+  }
+
+  const plan = async (s: ReturnType<typeof planner>, body: unknown = BODY) => {
+    const res = await s.route({ method: "POST", path: "/routes", body });
+    expect(res.status).toBe(200);
+    return res.body as RoutePlan;
+  };
+
+  it("returns RFC 0004 RouteOptions ranked by the cautious recipient amount, and the dropped ones", async () => {
+    const body = await plan(planner());
+
+    expect(body.offered.map((o) => [o.receivingDomain, o.price.label])).toEqual([
+      // 9100 less the 50 bps indicative margin is 9054.5, still above the locked 9000.
+      ["b.example", "indicative"],
+      ["a.example", "locked"],
+    ]);
+
+    const [indicative, locked] = body.offered;
+    expect(Object.keys(locked!).sort()).toEqual(
+      [
+        "corridorId",
+        "fees",
+        "price",
+        "protocol",
+        "reasons",
+        "receivingDomain",
+        "recipientGets",
+        "reliability",
+      ].sort(),
+    );
+    expect(locked).toMatchObject({
+      corridorId: "lane-a",
+      protocol: "sep31",
+      price: { label: "locked", rate: "90", quoteId: "q-9000" },
+      recipientGets: { asset: "iso4217:ARS", amount: "9000" },
+      fees: { asset: "USDC", amount: "1" },
+      // No run history and a fresh attestation: reliability()'s neutral 0.5.
+      reliability: 0.5,
+    });
+    expect(locked!.price.expiresAt).toBeGreaterThan(Date.now());
+    expect(locked!.reasons).toContain("attested for sep31");
+    expect(locked!.reasons.some((r) => /^locked for \d+ s$/.test(r))).toBe(true);
+
+    expect(indicative).toMatchObject({
+      corridorId: "lane-b",
+      price: { label: "indicative", rate: "91" },
+      recipientGets: { asset: "iso4217:ARS", amount: "9100" },
+    });
+    // No separate fee was stated, so none is invented.
+    expect(indicative).not.toHaveProperty("fees");
+    expect(indicative!.reasons[0]).toBe("ranked 1 of 2");
+    expect(indicative!.reasons).toContain(
+      "ranked on 9054.5 iso4217:ARS (50 bps margin off 9100)",
+    );
+
+    expect(body.dropped).toEqual([
+      {
+        corridorId: "lane-u",
+        receivingDomain: "u.example",
+        protocol: "sep31",
+        reason: "not attested for sep31",
+      },
+    ]);
+  });
+
+  it("applies policy.estimateMarginBps to the ranking", async () => {
+    const body = await plan(planner(), { ...BODY, policy: { estimateMarginBps: 200 } });
+    // 9100 less 2% is 8918, now below the locked 9000.
+    expect(body.offered.map((o) => o.receivingDomain)).toEqual(["a.example", "b.example"]);
+  });
+
+  it("asks GET /price for the corridor's SEP-38 pair", async () => {
+    const asked: string[] = [];
+    await plan(planner({ fetch: priceFeed("9100", asked) }));
+    expect(asked).toHaveLength(1);
+    const url = new URL(asked[0]!);
+    expect(url.origin + url.pathname).toBe("https://b.example/sep38/price");
+    expect(url.searchParams.get("sell_asset")).toBe("stellar:USDC:GISSUER");
+    expect(url.searchParams.get("buy_asset")).toBe("iso4217:ARS");
+    expect(url.searchParams.get("sell_amount")).toBe("100.00");
+  });
+
+  it("enforces policy.allowedLabels: a lane with no allowed price is dropped with why", async () => {
+    const body = await plan(planner(), { ...BODY, policy: { allowedLabels: ["locked"] } });
+    expect(body.offered.map((o) => o.price.label)).toEqual(["locked"]);
+    expect(body.dropped).toContainEqual({
+      corridorId: "lane-b",
+      receivingDomain: "b.example",
+      protocol: "sep31",
+      reason: "unpriceable (locked: quote refused: no firm quotes here)",
+    });
+  });
+
+  it("drops every lane, with the missing source, when nothing can price it", async () => {
+    const body = await plan(planner({ adapterFor: undefined, fetch: undefined }), {
+      ...BODY,
+      policy: { allowedLabels: ["locked", "estimated"] },
+    });
+    expect(body.offered).toEqual([]);
+    expect(body.dropped.find((d) => d.corridorId === "lane-a")?.reason).toBe(
+      "unpriceable (locked: no quote adapter configured; estimated: no rate history configured)",
+    );
+  });
+
+  it("prices from rate history as estimated (P25 less the margin) when that is all there is", async () => {
+    const now = Date.now();
+    // 160 samples, one an hour back over 160 hours (6.7 days) plus one 8 days back.
+    const history: RateSample[] = [
+      ...Array.from({ length: 160 }, (_, i) => ({
+        rate: String(80 + (i % 20)),
+        timestampMs: now - (i + 1) * 3_600_000,
+      })),
+      { rate: "85", timestampMs: now - 8 * 86_400_000 },
+    ];
+    const seen: string[] = [];
+    const body = await plan(
+      planner({
+        adapterFor: undefined,
+        fetch: undefined,
+        registry: registry(["a.example"]),
+        rateHistory: async (series) => {
+          seen.push(`${series.receivingDomain} ${series.sellAsset} ${series.buyAsset}`);
+          return history;
+        },
+      }),
+      { ...BODY, policy: { guaranteeEstimates: true } },
+    );
+    expect(seen).toEqual(["a.example stellar:USDC:GISSUER iso4217:ARS"]);
+    expect(body.offered).toHaveLength(1);
+    const [estimated] = body.offered;
+    expect(estimated!.price.label).toBe("estimated");
+    expect(estimated!.price.basis).toMatch(/^P25 of \d+ samples, 7d$/);
+    expect(estimated!.reasons).toContain("estimate guaranteed by the sending business");
+    expect(estimated).not.toHaveProperty("fees");
+  });
+
+  it("drops only the lane whose anchor answers with a malformed amount", async () => {
+    const body = await plan(
+      planner({
+        adapterFor: (c) =>
+          c.dest.endpoints.home_domain === "a.example" ? quoting("not-a-number") : refusing,
+      }),
+    );
+    expect(body.offered.map((o) => o.corridorId)).toEqual(["lane-b"]);
+    expect(body.dropped.find((d) => d.corridorId === "lane-a")?.reason).toBe(
+      "unpriceable (locked: recipient amount is not a positive decimal)",
+    );
+  });
+
+  it("drops a lane whose breaker is open", async () => {
+    const health = new InMemoryCorridorHealthStore();
+    await health.recordOutcome("lane-a", "failure", Date.now(), {
+      threshold: 1,
+      error: "anchor down",
+    });
+    const body = await plan(planner({}, { deps: { ...deps(), health } }));
+    expect(body.offered.map((o) => o.corridorId)).toEqual(["lane-b"]);
+    expect(body.dropped.find((d) => d.corridorId === "lane-a")?.reason).toMatch(
+      /^circuit breaker open since /,
+    );
+  });
+
+  it("drops a lane whose limits exclude the amount", async () => {
+    const s = createService({
+      corridors: new Map([
+        ["lane-a", lane("lane-a", "a.example", {}, { limits: { max_amount: "50" } })],
+      ]),
+      deps: deps(),
+      routePlanning: planning(),
+    });
+    const body = await plan(s);
+    expect(body.offered).toEqual([]);
+    expect(body.dropped).toEqual([
+      {
+        corridorId: "lane-a",
+        receivingDomain: "a.example",
+        protocol: "sep31",
+        reason: "amount 100.00 USDC above max 50",
+      },
+    ]);
+  });
+
+  it("drops a matching lane that does not take the source asset", async () => {
+    const body = await plan(planner(), {
+      ...BODY,
+      sourceAmount: { asset: "EURC", amount: "100" },
+    });
+    expect(body.offered).toEqual([]);
+    expect(body.dropped.map((d) => d.reason)).toEqual([
+      "source asset EURC is not this corridor's source or bridge asset",
+      "source asset EURC is not this corridor's source or bridge asset",
+      "source asset EURC is not this corridor's source or bridge asset",
+    ]);
+  });
+
+  it("returns nothing for a destination no corridor serves", async () => {
+    const body = await plan(planner(), {
+      ...BODY,
+      destCountry: "ng",
+      destAsset: "iso4217:NGN",
+    });
+    expect(body).toEqual({ offered: [], dropped: [] });
+  });
+
+  it("answers 501 when route planning is not configured", async () => {
+    const res = await svc().route({ method: "POST", path: "/routes", body: BODY });
+    expect(res.status).toBe(501);
+    expect(res.body).toEqual({
+      error: "ROUTE_PLANNING_UNCONFIGURED",
+      message: "route planning is not configured on this service",
+    });
+  });
+
+  it("needs a valid API key (401) and is rate-limited like /payments (429)", async () => {
+    const keyed = planner({}, { apiKeys: new Set(["secret"]) });
+    const noKey = await keyed.route({ method: "POST", path: "/routes", body: BODY });
+    expect(noKey.status).toBe(401);
+    expect(noKey.body).toEqual({ error: "unauthorized" });
+    const good = await keyed.route({
+      method: "POST",
+      path: "/routes",
+      body: BODY,
+      headers: { authorization: "Bearer secret" },
+    });
+    expect(good.status).toBe(200);
+
+    const limited = planner({}, { rateLimiter: { take: () => false } });
+    const res = await limited.route({ method: "POST", path: "/routes", body: BODY });
+    expect(res.status).toBe(429);
+    expect(res.body).toEqual({ error: "rate_limited" });
+  });
+
+  it("returns 503 while draining", async () => {
+    const s = planner();
+    await s.drain();
+    const res = await s.route({ method: "POST", path: "/routes", body: BODY });
+    expect(res.status).toBe(503);
+    expect(res.body).toEqual({ error: "draining" });
+  });
+
+  it.each([
+    ["not an object", "<body>", "expected a JSON object"],
+    [{ ...BODY, corridorId: "lane-a" }, "corridorId", "unknown field"],
+    [
+      { ...BODY, sourceAmount: undefined },
+      "sourceAmount",
+      "expected an object with asset and amount strings",
+    ],
+    [{ ...BODY, destAsset: undefined }, "destAsset", "expected a string"],
+    [{ ...BODY, destCountry: "ARG" }, "destCountry", "must be an ISO 3166-1 alpha-2 code"],
+    [{ ...BODY, payoutMethod: "" }, "payoutMethod", "must be 1-64 characters"],
+    [
+      { ...BODY, policy: { allowedLabels: ["firm"] } },
+      "policy.allowedLabels",
+      "each label must be locked, indicative or estimated",
+    ],
+    [
+      { ...BODY, policy: { estimateMarginBps: 10_000 } },
+      "policy.estimateMarginBps",
+      "must be an integer from 0 to 9999",
+    ],
+    [
+      { ...BODY, policy: { estimateWindowDays: 0 } },
+      "policy.estimateWindowDays",
+      "must be an integer from 1 to 90",
+    ],
+    [
+      { ...BODY, policy: { guaranteeEstimates: "yes" } },
+      "policy.guaranteeEstimates",
+      "expected a boolean",
+    ],
+    [{ ...BODY, policy: { surprise: true } }, "policy.surprise", "unknown field"],
+  ])("rejects an invalid body with 400 naming the field (%j)", async (body, field, reason) => {
+    const res = await planner().route({ method: "POST", path: "/routes", body });
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "invalid route request", field, reason });
+  });
+
+  it.each(["-50.00", "", "1,000"])(
+    "rejects amount %j with 422, as /payments does",
+    async (amount) => {
+      const res = await planner().route({
+        method: "POST",
+        path: "/routes",
+        body: { ...BODY, sourceAmount: { asset: "USDC", amount } },
+      });
+      expect(res.status).toBe(422);
+      expect(res.body).toEqual({
+        error: "AMOUNT_INVALID",
+        field: "sourceAmount.amount",
+        message: "amount must be a positive decimal",
+      });
+    },
+  );
+
+  // The router's planner contract, run against the endpoint itself. The kit is
+  // structural: `domain` is the option's receivingDomain, `label` its price label.
+  describePlannerContract(
+    "POST /routes",
+    () => {
+      const s = planner();
+      return {
+        plan: async (body: unknown) => {
+          const res = await s.route({ method: "POST", path: "/routes", body });
+          const { offered, dropped } = res.body as RoutePlan;
+          return {
+            offered: offered.map((o) => ({ domain: o.receivingDomain, label: o.price.label })),
+            dropped: dropped.map((d) => ({ domain: d.receivingDomain, reason: d.reason })),
+          };
+        },
+      };
+    },
+    { input: BODY, unattestedDomains: ["u.example"] },
+  );
 });

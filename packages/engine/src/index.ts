@@ -213,3 +213,20 @@ export {
   type RateCollectorLoopOptions,
   type RateCollectorLoopStats,
 } from "./rate-collector-loop";
+export {
+  DEFAULT_RETENTION_DAYS,
+  MIN_RETENTION_DAYS,
+  DEFAULT_PRUNE_BATCH_SIZE,
+  DEFAULT_MAX_PRUNE_BATCHES,
+  DEFAULT_BLOCKED_REPORT_LIMIT,
+  parseRetentionDays,
+  calculateRetentionCutoff,
+  PRUNE_RATE_SAMPLES_SQL,
+  SELECT_UNSUMMARIZED_DAYS_SQL,
+  pruneRateSamples,
+  createPruningCollectorStep,
+  type RatePruningOptions,
+  type RatePruningResult,
+  type RatePruningStepOptions,
+  type UnsummarizedDayRecord,
+} from "./rate-pruning";

@@ -17,6 +17,12 @@ import * as crypto from "node:crypto";
 import type { Corridor } from "@corridor/manifest";
 import { execute, type EngineDeps, type ExecuteOptions } from "@corridor/engine";
 import {
+  ALL_PRICE_LABELS,
+  type PriceLabel,
+  type RoutePolicy,
+  type RouteRequest as PlanRouteRequest,
+} from "@corridor/router";
+import {
   constantTimeEqual,
   err,
   isSettleableAmount,
@@ -35,8 +41,18 @@ import {
   type ChosenRouteOptionQuote,
   type RouteOptionRejection,
 } from "./route-option";
+import { planRoutes, type RoutePlanningOptions } from "./plan-routes";
 
 export { signRouteOption, verifyRouteOption };
+export { planRoutes };
+export type {
+  DroppedRoute,
+  PlannedRouteOption,
+  RateHistorySource,
+  RoutePlan,
+  RoutePlanningContext,
+  RoutePlanningOptions,
+} from "./plan-routes";
 export type {
   ChosenRouteOption,
   ChosenRouteOptionPayload,
@@ -120,6 +136,12 @@ export interface ServiceOptions {
    * `POST /payments`. Fails closed when omitted and a client submits `routeOption`.
    */
   routeOptionSecret?: string;
+  /**
+   * Dependencies for `POST /routes` (RFC 0004 route planning). Without them the
+   * endpoint answers 501: a planner needs an attestation source, because it
+   * never offers an anchor nobody has vouched for. See `RoutePlanningOptions`.
+   */
+  routePlanning?: RoutePlanningOptions;
 }
 
 /** Default cap on a buffered request body. A payment intent is well under 1 KiB. */
@@ -513,6 +535,157 @@ export function parsePaymentBody(o: unknown): Outcome<ParsedPaymentIntent, Payme
   });
 }
 
+/** The only top-level fields POST /routes accepts: RFC 0004's `RouteRequest`. */
+const ROUTE_FIELDS = new Set([
+  "sourceAmount",
+  "destAsset",
+  "destCountry",
+  "payoutMethod",
+  "policy",
+]);
+const POLICY_FIELDS = new Set([
+  "allowedLabels",
+  "guaranteeEstimates",
+  "estimateWindowDays",
+  "estimateMarginBps",
+]);
+const MAX_ASSET_ID = 128;
+const MAX_PAYOUT_METHOD = 64;
+const MAX_ESTIMATE_WINDOW_DAYS = 90;
+const COUNTRY_PATTERN = /^[A-Za-z]{2}$/;
+
+function parseRoutePolicy(raw: unknown): Outcome<RoutePolicy, PaymentBodyError> {
+  if (!isPlainObject(raw)) return reject("policy", "expected an object");
+  for (const key of Object.keys(raw)) {
+    if (!POLICY_FIELDS.has(key)) return reject(`policy.${key}`, "unknown field");
+  }
+  const policy: {
+    allowedLabels?: PriceLabel[];
+    guaranteeEstimates?: boolean;
+    estimateWindowDays?: number;
+    estimateMarginBps?: number;
+  } = {};
+  if (raw.allowedLabels !== undefined) {
+    const labels = raw.allowedLabels;
+    if (!Array.isArray(labels)) {
+      return reject("policy.allowedLabels", "expected an array of price labels");
+    }
+    for (const label of labels) {
+      if (!(ALL_PRICE_LABELS as readonly unknown[]).includes(label)) {
+        return reject(
+          "policy.allowedLabels",
+          "each label must be locked, indicative or estimated",
+        );
+      }
+    }
+    if (new Set(labels).size !== labels.length) {
+      return reject("policy.allowedLabels", "must not repeat a label");
+    }
+    policy.allowedLabels = labels as PriceLabel[];
+  }
+  if (raw.guaranteeEstimates !== undefined) {
+    if (typeof raw.guaranteeEstimates !== "boolean") {
+      return reject("policy.guaranteeEstimates", "expected a boolean");
+    }
+    policy.guaranteeEstimates = raw.guaranteeEstimates;
+  }
+  if (raw.estimateWindowDays !== undefined) {
+    const days = raw.estimateWindowDays;
+    if (
+      !Number.isInteger(days) ||
+      (days as number) < 1 ||
+      (days as number) > MAX_ESTIMATE_WINDOW_DAYS
+    ) {
+      return reject(
+        "policy.estimateWindowDays",
+        `must be an integer from 1 to ${MAX_ESTIMATE_WINDOW_DAYS}`,
+      );
+    }
+    policy.estimateWindowDays = days as number;
+  }
+  if (raw.estimateMarginBps !== undefined) {
+    const bps = raw.estimateMarginBps;
+    if (!Number.isInteger(bps) || (bps as number) < 0 || (bps as number) > 9_999) {
+      return reject("policy.estimateMarginBps", "must be an integer from 0 to 9999");
+    }
+    policy.estimateMarginBps = bps as number;
+  }
+  return ok(policy);
+}
+
+/**
+ * Parse a POST /routes body: RFC 0004's `RouteRequest`, strictly, with the same
+ * `{field, reason}` errors as POST /payments. The amount's syntax is checked by
+ * the caller (422 `AMOUNT_INVALID`), exactly as for a payment.
+ */
+export function parseRoutesBody(o: unknown): Outcome<PlanRouteRequest, PaymentBodyError> {
+  if (!isPlainObject(o)) {
+    return reject("<body>", "expected a JSON object");
+  }
+  for (const key of Object.keys(o)) {
+    if (!ROUTE_FIELDS.has(key)) {
+      return reject(key, "unknown field");
+    }
+  }
+
+  const rawSourceAmount = o.sourceAmount;
+  if (!isPlainObject(rawSourceAmount)) {
+    return reject("sourceAmount", "expected an object with asset and amount strings");
+  }
+  if (typeof rawSourceAmount.asset !== "string") {
+    return reject("sourceAmount.asset", "expected a string");
+  }
+  if (rawSourceAmount.asset.length === 0 || rawSourceAmount.asset.length > MAX_ASSET_ID) {
+    return reject("sourceAmount.asset", `must be 1-${MAX_ASSET_ID} characters`);
+  }
+  if (typeof rawSourceAmount.amount !== "string") {
+    return reject("sourceAmount.amount", "expected a string");
+  }
+  const sourceAmount = { asset: rawSourceAmount.asset, amount: rawSourceAmount.amount };
+
+  const destAsset = o.destAsset;
+  if (typeof destAsset !== "string") {
+    return reject("destAsset", "expected a string");
+  }
+  if (destAsset.length === 0 || destAsset.length > MAX_ASSET_ID) {
+    return reject("destAsset", `must be 1-${MAX_ASSET_ID} characters`);
+  }
+
+  const destCountry = o.destCountry;
+  if (typeof destCountry !== "string") {
+    return reject("destCountry", "expected a string");
+  }
+  if (!COUNTRY_PATTERN.test(destCountry)) {
+    return reject("destCountry", "must be an ISO 3166-1 alpha-2 code");
+  }
+
+  let payoutMethod: string | undefined;
+  if (o.payoutMethod !== undefined) {
+    if (typeof o.payoutMethod !== "string") {
+      return reject("payoutMethod", "expected a string");
+    }
+    if (o.payoutMethod.length === 0 || o.payoutMethod.length > MAX_PAYOUT_METHOD) {
+      return reject("payoutMethod", `must be 1-${MAX_PAYOUT_METHOD} characters`);
+    }
+    payoutMethod = o.payoutMethod;
+  }
+
+  let policy: RoutePolicy | undefined;
+  if (o.policy !== undefined) {
+    const parsedPolicy = parseRoutePolicy(o.policy);
+    if (!parsedPolicy.ok) return parsedPolicy;
+    policy = parsedPolicy.value;
+  }
+
+  return ok({
+    sourceAmount,
+    destAsset,
+    destCountry: destCountry.toUpperCase(),
+    ...(payoutMethod !== undefined ? { payoutMethod } : {}),
+    ...(policy !== undefined ? { policy } : {}),
+  });
+}
+
 /** Asset the body must name: what the sender puts in, i.e. the corridor's
  *  source asset / bridge asset. Checked AFTER the corridor is looked up, so it
  *  compares against the manifest rather than anything the caller supplied. */
@@ -769,6 +942,59 @@ export function createService(options: ServiceOptions): Service {
         status: STATUS_BY_CODE[result.error.code] ?? 500,
         body: { error: result.error.code, message: result.error.message },
       };
+    }
+
+    // --- POST /routes ---
+    // RFC 0004 route planning: ranked options for a payment, before paying.
+    // Read-only at the anchors (a firm quote is requested, never accepted), so
+    // it carries no idempotency key. Same auth and rate limit as /payments.
+    if (req.method === "POST" && path === "/routes") {
+      if (draining) {
+        return { status: 503, body: { error: "draining" } };
+      }
+      if (!options.routePlanning) {
+        return {
+          status: 501,
+          body: {
+            error: "ROUTE_PLANNING_UNCONFIGURED",
+            message: "route planning is not configured on this service",
+          },
+        };
+      }
+      const parsed = parseRoutesBody(req.body);
+      if (!parsed.ok) {
+        return {
+          status: 400,
+          body: {
+            error: "invalid route request",
+            field: parsed.error.field,
+            reason: parsed.error.reason,
+          },
+        };
+      }
+      if (!isSettleableAmount(parsed.value.sourceAmount.amount)) {
+        return {
+          status: 422,
+          body: {
+            error: "AMOUNT_INVALID",
+            field: "sourceAmount.amount",
+            message: "amount must be a positive decimal",
+          },
+        };
+      }
+      const plan = await planRoutes(
+        parsed.value,
+        [...options.corridors.values()],
+        options.routePlanning,
+        {
+          ...(options.deps.health ? { health: options.deps.health } : {}),
+          ...(options.deps.unprovenMaxAmount !== undefined
+            ? { unprovenMaxAmount: options.deps.unprovenMaxAmount }
+            : {}),
+          now,
+        },
+      );
+      return { status: 200, body: plan };
     }
 
     // --- POST /callbacks/sep31/:corridorId ---

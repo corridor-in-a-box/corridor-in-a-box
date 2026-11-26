@@ -142,6 +142,73 @@ paths:
                   - { $ref: "#/components/schemas/Draining" }
                   - { $ref: "#/components/schemas/EngineError" }
         "504": { $ref: "#/components/responses/EngineError" }
+  /routes:
+    post:
+      tags: [payments]
+      operationId: planRoutes
+      summary: Plan and rank routes before paying
+      description: |
+        RFC 0004 route planning (`docs/rfcs/0004-smart-router.md` §1). Takes a `RouteRequest`
+        and returns every corridor whose destination matches `destAsset` and `destCountry`:
+        the ones it can offer as ranked `RouteOption`s, and the rest in `dropped` with the
+        reason. Steps, in order: candidates, registry evidence (a fresh attestation for the
+        corridor's protocol), the manifest's amount limits (with the engine's cap for an
+        unproven lane), the lane circuit breaker, then a price, firmest allowed label first:
+        `locked` (a firm SEP-38 quote), `indicative` (SEP-38 `GET /price`), `estimated`
+        (rate history). Options are ranked by what the recipient gets, priced cautiously
+        (`indicative` and `estimated` less `policy.estimateMarginBps`), then reliability,
+        then receiving domain (RFC 0004 §1 "Ranking").
+
+        Read-only at the anchors: a firm quote is requested, never accepted, and no
+        transaction is opened. The lane check (RFC 0004 §4b) is not applied yet, and
+        `payoutMethod` does not filter yet, because no manifest declares one.
+
+        Answers 501 when the service was started without route planning configured: a
+        planner never offers an anchor without registry evidence, so it needs a source.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RouteRequest" }
+      responses:
+        "200":
+          description: Ranked options, best first, and the matching routes not offered.
+          headers:
+            x-request-id: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RoutePlan" }
+        "400":
+          description: The body is not a valid route request. `field` names the offending input.
+          headers:
+            x-request-id: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InvalidBody" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "413": { $ref: "#/components/responses/TooLarge" }
+        "422":
+          description: "`sourceAmount.amount` is not a positive decimal."
+          headers:
+            x-request-id: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AmountInvalid" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "501":
+          description: Route planning is not configured on this service.
+          headers:
+            x-request-id: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RoutePlanningUnconfigured" }
+        "503":
+          description: Draining.
+          headers:
+            x-request-id: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Draining" }
   /payments/{key}:
     get:
       tags: [payments]
@@ -491,9 +558,111 @@ components:
       required: [error, field, reason]
       additionalProperties: false
       properties:
-        error: { const: invalid payment body }
+        error: { enum: [invalid payment body, invalid route request] }
         field: { type: string, description: 'Path of the offending input, e.g. "sender.id".' }
         reason: { type: string }
+    RouteRequest:
+      type: object
+      description: RFC 0004 `RouteRequest`.
+      required: [sourceAmount, destAsset, destCountry]
+      additionalProperties: false
+      properties:
+        sourceAmount: { $ref: "#/components/schemas/Money" }
+        destAsset:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Payout asset, as manifests name it.
+          examples: ["iso4217:NGN"]
+        destCountry:
+          type: string
+          pattern: "^[A-Za-z]{2}$"
+          description: ISO 3166-1 alpha-2. Compared case-insensitively.
+          examples: [NG]
+        payoutMethod:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Accepted for RFC 0004; does not filter yet (no manifest declares one).
+          examples: [bank_account]
+        policy: { $ref: "#/components/schemas/RoutePolicy" }
+    RoutePolicy:
+      type: object
+      additionalProperties: false
+      properties:
+        allowedLabels:
+          type: array
+          uniqueItems: true
+          items: { $ref: "#/components/schemas/PriceLabel" }
+          description: Labels that may be offered. Omitted, all three are.
+        guaranteeEstimates:
+          type: boolean
+          description: The sending business pays out an `estimated` amount as shown (RFC 0004 D4).
+        estimateWindowDays: { type: integer, minimum: 1, maximum: 90, default: 7 }
+        estimateMarginBps: { type: integer, minimum: 0, maximum: 9999, default: 50 }
+    PriceLabel:
+      enum: [locked, indicative, estimated]
+    RouteOption:
+      type: object
+      description: >-
+        RFC 0004 `RouteOption`. `fees` is present only when the anchor stated a fee (a firm
+        quote's `fee`); `recipientGets` is always after fees.
+      required:
+        [corridorId, receivingDomain, protocol, price, recipientGets, reliability, reasons]
+      additionalProperties: false
+      properties:
+        corridorId: { type: string }
+        receivingDomain: { type: string }
+        protocol: { enum: [sep31, sep6, wallet] }
+        price:
+          type: object
+          required: [label, rate]
+          additionalProperties: false
+          properties:
+            label: { $ref: "#/components/schemas/PriceLabel" }
+            rate: { type: string, description: Destination units per 1 source unit. }
+            quoteId: { type: string, description: "`locked` only." }
+            expiresAt: { type: integer, description: "`locked` only. Epoch ms." }
+            basis:
+              {
+                type: string,
+                description: '`estimated` only, e.g. "P25 of 1,912 samples, 7d".',
+              }
+        recipientGets: { $ref: "#/components/schemas/Money" }
+        fees: { $ref: "#/components/schemas/Money" }
+        reliability: { type: number, minimum: 0, maximum: 1 }
+        reasons:
+          type: array
+          items: { type: string }
+          description: Why the option ranked where it did, for display and audit.
+    DroppedRoute:
+      type: object
+      required: [corridorId, receivingDomain, protocol, reason]
+      additionalProperties: false
+      properties:
+        corridorId: { type: string }
+        receivingDomain: { type: string }
+        protocol: { type: string }
+        reason: { type: string }
+    RoutePlan:
+      type: object
+      required: [offered, dropped]
+      additionalProperties: false
+      properties:
+        offered:
+          type: array
+          description: Best first.
+          items: { $ref: "#/components/schemas/RouteOption" }
+        dropped:
+          type: array
+          items: { $ref: "#/components/schemas/DroppedRoute" }
+    RoutePlanningUnconfigured:
+      type: object
+      required: [error, message]
+      additionalProperties: false
+      properties:
+        error: { const: ROUTE_PLANNING_UNCONFIGURED }
+        message: { type: string }
     Draining:
       type: object
       required: [error]

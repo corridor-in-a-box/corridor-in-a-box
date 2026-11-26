@@ -18,6 +18,72 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   are planned (wallet trustline check #648).
 - `docs/README.md` indexes the guides and RFCs. The web docs site has a route planner
   page, and `docs/route-resolver.md` and `README.md` link to the guide.
+### Added — `POST /routes`: plan and rank routes before paying ([#617](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/617))
+
+- `@corridor/service` serves `POST /routes`. It takes RFC 0004's `RouteRequest` (`sourceAmount`,
+  `destAsset`, `destCountry`, `payoutMethod`, `policy`) and returns
+  `{ offered: RouteOption[], dropped: [{ corridorId, receivingDomain, protocol, reason }] }`:
+  ranked RFC 0004 options with a price label, rate, `recipientGets`, reliability and reasons, and
+  every matching corridor it could not offer, with why.
+- Built from the `@corridor/router` blocks in RFC order (`planRoutes` in
+  `packages/service/src/plan-routes.ts`): `candidates()`, `filterByEvidence()`, the manifest's
+  limits with the engine's cap for an unproven lane, `filterByCircuitBreaker()`, then a price,
+  firmest allowed label first (`locked` from a firm SEP-38 quote, `indicative` from SEP-38
+  `GET /price`, `estimated` from rate history), `policy.allowedLabels`, `reliability()` and
+  `rank()`. Pricing runs in parallel under a deadline. No transaction is opened.
+- Configured with `ServiceOptions.routePlanning`: an attestation source (required), and
+  optionally a quote adapter, `fetch`, a rate history source and a run store for reliability. A
+  missing source removes that label and says so in `dropped`. Without `routePlanning` the
+  endpoint answers 501 `ROUTE_PLANNING_UNCONFIGURED`.
+- Same API-key auth and rate limit as `POST /payments`; 400 `{field, reason}` for a bad body,
+  422 `AMOUNT_INVALID` for a bad amount, 503 while draining. Documented in
+  `packages/service/openapi.yaml` and checked by `tests/openapi.test.ts`.
+- Not yet: the lane check (RFC 0004 §4b), and `payoutMethod` does not filter, because no
+  manifest declares one. `fees` is returned only when the anchor stated one.
+
+### Added — accessibility checks for every step of the send app ([#692](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/692))
+
+- `web/e2e/accessibility.spec.ts` runs axe (WCAG A, AA and 2.2 tags plus best-practice) over each
+  step of the `/send` flow: the amount and destination form, an amount it refuses, finding routes,
+  the ranked routes with all three price labels, the locked-price countdown and its warning, the
+  recipient details loading and loaded, Send refused for missing details, sending, sent, and each
+  failure screen (no routes, every route dropped, an expired locked price, routes or recipient
+  details that can't be loaded, a failed payment). The main steps are scanned again in the dark
+  theme. The older `/payments` runner keeps a smaller set of scans.
+- Keyboard behaviour is asserted beside the scans: Tab reaches every form control in reading order,
+  Enter submits, the routes are one radio group that arrow keys move through and Tab leaves, a
+  refused amount or missing recipient detail moves focus to the field and is read out as its
+  description, and each error screen's button can be pressed from the keyboard.
+- `/send` renders the app without a route planner, field loader or sender, because
+  `@corridor/service` has none yet, so the later steps run on `web/app/send/a11y-fixture`: the same
+  app inside the same `/send` layout, with those three wired to fetches the spec answers with
+  `page.route`. No engine, service or network is needed. The page is a 404 unless the server runs
+  with `SEND_A11Y_FIXTURE=1`, which `web/playwright.config.ts` sets.
+- `web/playwright.config.ts` drives `next start` on the production build rather than the dev
+  server, because axe reads colour contrast from the compiled Tailwind stylesheet. Run it locally
+  with `pnpm test:a11y` in `web/`; it is not part of CI yet.
+- Fixed: an optional recipient field's accessible name ran its label into the mark
+  ("Reference(optional)"), because the gap was a CSS margin. It is now a real space, so it reads
+  "Reference (optional)". axe found no other issues in the send components.
+- The final check breaks `/send` on purpose — an unlabelled field, text that misses the AA ratio,
+  the amount field removed from the tab order — and requires the checks to notice each. Without it
+  a green run would only prove axe had nothing to say.
+
+### Added — rate history retention and daily pruning ([#599](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/599))
+
+- `createPruningCollectorStep()` in `@corridor/engine` is a `RateCollectorLoop` step that, once
+  per UTC day, deletes raw `rate_samples` older than the retention period, oldest first, in
+  batches (1,000 rows, at most 100 batches a run; a larger backlog continues on the next tick).
+  `pruneRateSamples()` runs one pass directly.
+- Retention is `RATE_RETENTION_DAYS` whole UTC days (default 90). Values below 7 are refused,
+  because the minimum-data rule and the 7-day estimate window read raw samples.
+- The guard is part of the `DELETE`: a sample goes only when its series has a
+  `rate_daily_summaries` row for its UTC day, computed after the sample was recorded. Days
+  without one are kept and logged (`corridor.rate_pruning.unsummarized_days_skipped`). Daily
+  summaries are never deleted.
+- `pnpm rate:collector` (`examples/run-rate-collector.ts`) registers the step. Pruning adds no
+  table; the collector's database role needs `delete` on `rate_samples` (`docs/operations.md`).
+  `docs/rate-history.md` now states the retention.
 
 ### Added — SEP-6 corridors are candidates only with `third_party_payout` ([#645](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/645))
 

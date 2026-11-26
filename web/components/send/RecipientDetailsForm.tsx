@@ -19,9 +19,14 @@ interface RecipientDetailsFormProps {
   idPrefix: string;
 }
 
+// A real space rather than a margin, so the field's accessible name reads
+// "Reference (optional)" and not "Reference(optional)".
 function optionalMark(optional: boolean) {
   return optional ? (
-    <span className="ml-1.5 font-normal text-secondary-text">(optional)</span>
+    <>
+      {" "}
+      <span className="font-normal text-secondary-text">(optional)</span>
+    </>
   ) : null;
 }
 

@@ -950,6 +950,32 @@ grant select, insert, update on rate_samples, rate_daily_summaries to corridor_s
 grant usage on sequence rate_samples_id_seq to corridor_service;
 ```
 
+**Retention and pruning (#599).** The collector (`pnpm rate:collector`) runs a
+`rate_pruning` step (`createPruningCollectorStep`,
+`packages/engine/src/rate-pruning.ts`) on its first tick of each UTC day. It
+deletes `rate_samples` taken before midnight UTC `RATE_RETENTION_DAYS` days
+before today (default 90, at least 7), oldest first, in batches of 1,000 rows,
+at most 100 batches a run; a larger backlog carries on at the next tick.
+
+- **The guard.** A sample is deleted only when its series has a
+  `rate_daily_summaries` row for the sample's UTC day, computed after the
+  sample was recorded. The check is part of the `DELETE`. A day with no
+  summary, or a sample that arrived after its day was summarised, is kept and
+  logged as `corridor.rate_pruning.unsummarized_days_skipped`. Nothing writes
+  `rate_daily_summaries` on a schedule yet, so until a summary job runs, the
+  step deletes nothing.
+- **Never deleted:** `rate_daily_summaries` rows, and samples from the last
+  `RATE_RETENTION_DAYS` whole days and today.
+- **No extra table.** Pruning keeps no state: `migrate()` creates only
+  `rate_samples` and `rate_daily_summaries`, and their indexes, for rate
+  history. After a restart the step prunes again on its first tick, which
+  deletes only what is still eligible.
+- The role the collector connects as also needs `delete` on `rate_samples`:
+
+```sql
+grant delete on rate_samples to corridor_service;
+```
+
 To read a payment's trail, use `PostgresAuditSink.listAudit(idempotencyKey)`.
 It returns the entries oldest first.
 
