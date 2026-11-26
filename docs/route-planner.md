@@ -1,409 +1,267 @@
 # Route planner guide: how a route is chosen
 
-`corridor-in-a-box` is an open, manifest-driven engine for cross-border payment
-corridors on Stellar. One of its architectural boundaries is the **router seam**:
-the engine never hard-codes where a payment goes or which anchor receives it.
-Instead, a **route planner** evaluates the payment intent, checks verifiable
-facts, ranks candidate lanes, and returns a binding `RouteDecision`.
+A sender says "send this amount to this country, in this currency". The route
+planner turns that into a short, ranked list of ways to pay, each with an
+honest price label and the reasons it ranked where it did. This page explains
+the rules in plain words for businesses and contributors.
 
-This guide explains in plain words how a route is chosen. It is written for
-fintech operators, remittance businesses, and open-source contributors who need
-to understand the decision rules, the safety guarantees, and how to plug in
-custom routing logic.
+The design is [RFC 0004: Smart router](rfcs/0004-smart-router.md), sections 1,
+2 and 5. The code-level seam the planner hands its choice to is
+[docs/route-resolver.md](route-resolver.md).
 
-For the underlying architectural specification, see [RFC 0004: Smart router](rfcs/0004-smart-router.md).
-For the code-level module contract and loader API, see [docs/route-resolver.md](route-resolver.md).
+> **What is built today.** `@corridor/router` ships the planner's types and most
+> of its steps as separate building blocks. It does not yet ship a complete
+> `RoutePlanner`: the ranking function ([#611]) and automatic fallback to the
+> next route ([#626]) are planned. Each section below says which parts exist
+> and which are planned.
 
----
+## What the planner does and does not do
 
-## 1. Core architecture & separation of concerns
+- **It only decides.** The sending business's own signer executes the payment
+  (RFC 0004, D1). The planner never holds funds, never holds a key and never
+  signs anything.
+- **It runs before the payment starts.** It replaces the caller picking a
+  `corridorId` by hand. The chosen route is then pinned, so a payment that
+  resumes after a restart goes back to the anchor the money was sent to.
 
-To understand route selection, it helps to separate four distinct layers:
-
-```text
-┌────────────────────────────────────────────────────────────────────────┐
-│ 1. Engine (@corridor/engine)                                           │
-│    Orchestrates the payment lifecycle state machine:                   │
-│    quote → comply → open → settle → reconcile                          │
-└──────────────────────────────────┬─────────────────────────────────────┘
-                                   │ delegates destination selection
-                                   ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│ 2. Route Planner (@corridor/router)                                    │
-│    Evaluates intent, verifies evidence, ranks candidates, and selects  │
-│    the receiving (and optional sending) anchor adapter.                │
-└──────────────────┬───────────────────────────────┬─────────────────────┘
-                   │ reads static configuration    │ checks verified facts
-                   ▼                               ▼
-┌────────────────────────────────────┐ ┌─────────────────────────────────┐
-│ 3. Manifests (@corridor/manifest)  │ │ 4. Registry (@corridor/registry)│
-│    Declarative *.corridor.yaml     │ │    On-chain Soroban contract of │
-│    files specifying endpoints,     │ │    independently probed facts:  │
-│    assets, limits, and rules.      │ │    serves protocol? fresh? hash?│
-└────────────────────────────────────┘ └─────────────────────────────────┘
+```
+RouteRequest ──▶ RoutePlanner.plan() ──▶ RouteOption[] (ranked)
+                                              │ caller or policy picks one
+                                              ▼
+                       PaymentIntent{corridorId, pinned route} ──▶ execute()
+                                              │
+                         PinnedRouteResolver.resolve() returns the pinned anchor
 ```
 
-1. **The Engine** owns payment execution, idempotency, and recovery. It does not
-   know about exchange rates, anchor health scores, or country preferences.
-2. **The Route Planner** implements `RouteResolver`. It examines the `PaymentIntent`
-   and available corridors, filters out unsafe or dead lanes, and picks the best
-   route.
-3. **The Manifest** (`*.corridor.yaml`) declares what a corridor claims to do:
-   assets, protocols, endpoint URLs, settlement limits, and recovery parameters.
-4. **The Registry** records what anchors _demonstrably_ do on-chain: whether
-   automated attesters verified the anchor's endpoints and SEP compliance, when
-   that was last checked, and the cryptographic hash of its `stellar.toml`.
+The request and option types are exported from `@corridor/router`
+(`packages/router/src/planner.ts`): `RouteRequest`, `RoutePolicy`,
+`PriceLabel`, `RouteOption` and `RoutePlanner`.
 
----
+## The steps
 
-## 2. The steps: how a route is evaluated
+A planner works through seven steps. Every route it drops keeps the reason, so
+a business can see why a route was not offered.
 
-When a payment intent is processed (or resumed after a crash), the route planner
-moves through six deterministic steps:
+| #   | Step           | In plain words                                                                                                                                                                                  | On main today                                                                                                                                                           |
+| --- | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | **Candidates** | Take the corridors this business has configured whose destination matches the requested currency and country.                                                                                   | `candidates()` ([#604])                                                                                                                                                 |
+| 2   | **Evidence**   | Keep only anchors with a fresh registry attestation for the corridor's protocol. Unknown is refused, never assumed.                                                                             | `filterByEvidence()` ([#605]), the same check `RegistryRouteResolver` makes                                                                                             |
+| 3   | **Lane check** | Keep only receiving anchors that have onboarded _this_ sending business.                                                                                                                        | `checkLane()`, a SEP-10 login with the business's own key                                                                                                               |
+| 4   | **Limits**     | Drop anchors whose minimum or maximum excludes the amount, or that need details the request cannot supply.                                                                                      | `filterByLimitsAndFields()` ([#606])                                                                                                                                    |
+| 5   | **Health**     | Drop anchors whose circuit breaker is open.                                                                                                                                                     | `filterByCircuitBreaker()` ([#607])                                                                                                                                     |
+| 6   | **Price**      | Ask each remaining anchor for a price and label it (see [the three labels](#the-three-labels)). An anchor with no price and not enough rate history is returned as unpriceable and ranked last. | `requestLockedOption()` ([#608]), `fetchIndicativePrice()` ([#609]), `buildEstimatedOption()` ([#610]), `priceCandidatesInParallel()`, `filterOptionsByAllowedLabels()` |
+| 7   | **Rank**       | Order what is left by [the ranking rule](#the-ranking-rule) and return every option, including the dropped ones with their reason.                                                              | Planned: ranking ([#611]). On main: `reliability()` ([#612]) and reasons on every option ([#613]).                                                                      |
 
-```text
-PaymentIntent
-     │
-     ▼
-[ Step 1: Candidate Gathering ] ─── Filter manifests by source & dest asset/country
-     │
-     ▼
-[ Step 2: Attestation Gating ]  ─── Query on-chain registry: serves protocol? fresh?
-     │
-     ▼
-[ Step 3: Liveness & Safety ]   ─── Check breaker status, limits & verification tier
-     │
-     ▼
-[ Step 4: Ranking Rule ]        ─── Sort viable candidates by proof, freshness & cost
-     │
-     ▼
-[ Step 5: Decision Formation ]  ─── Construct RouteDecision (adapter, trust, split)
-     │
-     ▼
-[ Step 6: Fallback Handling ]   ─── If primary fails, fall back without weakening trust
-```
+## The three labels
 
-### Step 1: Candidate gathering
+Every price carries exactly one of three labels (RFC 0004, D2 and section 2).
+They tell the sender how firm the amount is.
 
-The planner inspects the incoming `PaymentIntent` (source amount, source asset,
-and target currency or destination country). It identifies candidate corridor
-manifests whose `source.asset` and `dest.asset` match the payment requirement.
+| Label        | Shown to the sender as                                                    | Where the price comes from                                                                             |
+| ------------ | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `locked`     | "Recipient gets ₦X. Locked for 60 s."                                     | A firm SEP-38 quote. It carries a quote id and an expiry.                                              |
+| `indicative` | "About ₦X. Final amount set at payout."                                   | The anchor's current price (SEP-38 `/price`, or a rate it publishes). Not promised.                    |
+| `estimated`  | "At least ₦X (estimated)" if guaranteed, otherwise "About ₦X (estimated)" | Our [rate history](rate-history.md): the lower quartile (P25) of the last 7 days, minus a 0.5% margin. |
 
-### Step 2: Attestation gating
+- Labels are never mixed or rounded into each other. In many places the law
+  requires an estimate to be shown as an estimate.
+- An anchor gets `estimated` only with at least 7 days of history and at least
+  100 samples in the window. Below that it is unpriceable.
+- A business's legal team decides which labels it may show.
+  `policy.allowedLabels` enforces that; `filterOptionsByAllowedLabels()` drops
+  the other options with a reason.
+- A business can choose to guarantee estimated prices
+  (`policy.guaranteeEstimates`, off by default). It then pays the shown amount
+  and covers any difference from its own funds. Recording that difference per
+  payment (`estimate_gap`) is planned ([#627]).
 
-For each candidate, the planner checks whether the receiving anchor has valid
-evidence in the on-chain registry:
+## The ranking rule
 
-- **Protocol match:** Does the anchor demonstrably serve the protocol declared in
-  the manifest (`serves(domain, protocol)`)? A SEP-31 corridor is checked against
-  the SEP-31 probe; a SEP-6 corridor is checked against the SEP-6 probe.
-- **Freshness bound:** Is the attestation fresh? By default, attestations older
-  than `120,960` ledgers (~1 week at 5s ledgers) are treated as expired.
-- **TOML hash verification:** Does the anchor's live `stellar.toml` match the
-  attested SHA-256 hash?
+Options are ranked by **what the recipient gets, priced cautiously**, then by
+reliability, then by speed:
 
-If the registry cannot be reached or has no passing record for the anchor, the
-gate **fails closed**. An unverified anchor is never routed through on trust.
+1. **What the recipient gets**, counted cautiously for each label:
+   - `locked`: the quoted amount.
+   - `indicative`: the indicative amount minus the estimate margin, because it
+     is not promised.
+   - `estimated`: the P25 amount minus the margin.
+2. **Reliability**: this business's own success rate on that anchor over the
+   last 30 days, scaled down when the anchor's attestation is old.
+3. **Speed**: ties go to the faster anchor.
 
-### Step 3: Liveness & safety evaluation
+The ranking is deterministic: the same request gives the same order, with no
+hidden weights and no randomness. Every option carries `reasons`, so any
+choice can be explained to the sender and checked later.
 
-Candidates that pass attestation are checked against operational constraints:
+On main, the pricing steps already produce the cautious amounts:
+`requestLockedOption()` and `fetchIndicativePrice()` return a
+`cautiousDestAmount` (the indicative one minus `DEFAULT_ESTIMATE_MARGIN_BPS`,
+50 basis points), and `buildEstimatedOption()` applies the same margin to the
+P25 rate. The reliability score is `reliability()` ([#612]): with fewer than
+20 runs in the window it is pulled toward 0.5, so one early result cannot
+decide it, and it falls to 0 as the attestation reaches the one-week freshness
+bound. The function that sorts options by amount, reliability and speed is
+planned ([#611]).
 
-- **Circuit Breaker:** Has the lane tripped? If a corridor suffered consecutive
-  settlement/reconcile failures (default 3), the lane is halted (`CORRIDOR_HALTED`).
-  Halted corridors are excluded from routing until an operator explicitly resets them.
-- **Amount boundaries:** Does the payment amount fit within the manifest's
-  `limits.min_amount` and `limits.max_amount`? If a corridor defines a canary cap
-  (`canary_max_amount`), payments above that cap are restricted unless the lane has
-  graduated to `proven`.
-- **Liveness label:** Is the manifest labeled `proven`, `verified`, or `unverified`?
+## The fallback rule
 
-### Step 4: Candidate ranking
+What happens when the chosen route fails depends on whether money has moved:
 
-Remaining viable candidates are ordered using the **Ranking Rule** (detailed
-below), sorting the best route to the top based on proof quality, attestation
-freshness, uptime, and pricing.
+- **Before funds move** (the quote is refused, KYC is rejected, or opening the
+  transaction fails): the run is marked failed, and a new run starts on the next
+  option with a derived idempotency key, `<key>:alt1`. The audit trail links
+  the two runs.
+- **After settlement starts**: never switch. Recovery follows the existing
+  refund path.
 
-### Step 5: Decision formation
+Status: automatic fallback is planned ([#626]). Today a failure before funds
+move ends the run as failed, and the caller decides whether to start a new
+payment on another option.
 
-The planner selects the top-ranked candidate and constructs an immutable
-`RouteDecision`:
+## Route types
+
+| Type     | Status    | How the money moves                                                                                                               | What must be true first                                                                                                     |
+| -------- | --------- | --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `sep31`  | available | Anchor to anchor. The receiving anchor pays the recipient.                                                                        | The anchor is attested and the lane is open to this business.                                                               |
+| `sep6`   | next      | The business withdraws through SEP-6 straight to the recipient's account.                                                         | The manifest declares `third_party_payout: true`, confirmed with the anchor ([#644]). The planner rule is planned ([#645]). |
+| `wallet` | in build  | A plain Stellar payment of the corridor's asset (for example USDC) to the recipient's own wallet. The recipient cashes out later. | The recipient has a wallet that can hold the asset.                                                                         |
+
+**SEP-31** is the Stellar standard for one licensed business paying another. It
+runs without a person in the loop, which is what a payment engine needs.
+
+**SEP-6 and the third-party caveat.** SEP-6 was designed for a customer moving
+their own money in or out of an anchor. Here the business pays out to someone
+else, a third party. Not every anchor allows that, and no automatic probe can
+tell. So a SEP-6 route is only offered when the corridor manifest says
+`third_party_payout: true` and that has been confirmed with the anchor. The
+flag is on main ([#644]): only a `protocol: sep6` corridor may carry it, and
+`third_party_payout: true` needs a `third_party_payout_note` saying who
+confirmed it and when. `allowsThirdPartyPayout()` in `@corridor/manifest` reads
+it. The planner rule that offers SEP-6 candidates only when it is set is
+planned ([#645]).
+
+**Wallet.** No receiving anchor is involved and nothing is converted: the
+recipient gets the corridor's asset in their own wallet and cashes out through
+an anchor of their choice. The engine never drives SEP-24 for this ([RFC
+0003](rfcs/0003-sep24-interactive-handoff.md)). On main, the `protocol: wallet`
+manifest shape ([#646]) and `WalletAdapter` in `@corridor/stellar` ([#647])
+exist. Checking the recipient's trustline before sending is planned ([#648]).
+
+## How to plug in a custom planner
+
+A business can write its own planner without forking this repository. There
+are three parts: the planner itself, the conformance suite, and handing its
+choice to the engine.
+
+### 1. Implement `RoutePlanner`
+
+Implement the `RoutePlanner` interface from `@corridor/router`. It has one
+method, `plan(req: RouteRequest): Promise<ReadonlyArray<RouteOption>>`. Build
+it from the step functions above rather than re-writing them, so the evidence,
+limits and breaker rules stay the ones this repo tests:
 
 ```ts
-interface RouteDecision {
-  readonly receiving: AnchorAdapter;
-  readonly sending?: SourceAnchorAdapter;
-  readonly trust: "attested" | "manifest";
-  readonly split?: ReadonlyArray<{ adapter: AnchorAdapter; weight: number }>;
-}
-```
-
-- `receiving`: The instantiated adapter ready to execute the destination leg.
-- `sending`: The source adapter if source funding is required (e.g. SEP-6 deposit).
-- `trust`: `"attested"` when verified against on-chain evidence, or `"manifest"`
-  when running under an explicit operator override.
-- `split`: Reserved for multi-anchor routing (weights must sum to 1.0).
-
-### Step 6: Fallback handling
-
-If the top candidate becomes unresolvable before settlement begins, the planner
-applies the **Fallback Rule** to attempt the next qualified candidate without
-degrading security.
-
----
-
-## 3. The three labels
-
-Every route candidate is classified under one of three operational labels. These
-labels prevent fictional or unconfirmed endpoints from masquerading as healthy:
-
-| Label            | What it means                                                                                                                                                                                  | Attestation required? | Production runnable?                        |
-| :--------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------------- | :------------------------------------------ |
-| **`proven`**     | **Gold standard.** Endpoints verified, and a real canary payment through this exact lane has settled and completed within `max_age_days` (default 30d). Proof block holds immutable tx hashes. | Yes                   | Yes (full capacity)                         |
-| **`verified`**   | **Standard production.** Endpoints checked against the anchor's published `stellar.toml` on a recorded date (`endpoints_verified_at`), and on-chain attestation is active.                     | Yes                   | Yes (subject to canary limits)              |
-| **`unverified`** | **Untrusted / draft.** Endpoints are declared in YAML, but no human or attester has confirmed they resolve. Default for new manifests.                                                         | No                    | **No** (refused by `RegistryRouteResolver`) |
-
-> [!IMPORTANT]
-> If a manifest is missing a required endpoint outright (e.g. no `transfer_server`
-> or `transfer_server_sep31`), its state is **`not-runnable`**. It cannot settle
-> under any circumstances and is immediately discarded during candidate gathering.
-
-### Why the three labels matter to businesses
-
-A common trap in cross-border systems is treating configuration as proof of life.
-Writing `https://example.com/sep31` in a YAML file does not mean the server exists,
-that the anchor's KYC server answers, or that money can settle.
-
-- **`unverified` lanes are blocked by default.** `RegistryRouteResolver` throws
-  `UnattestedAnchorError`, which maps to `ROUTE_REFUSED` (HTTP 503).
-- **`verified` lanes permit automated execution**, ensuring that both DNS and SEP
-  capabilities answered an automated probe.
-- **`proven` lanes provide cryptographic auditability**, proving that real funds
-  traversed the entire chain from quote to external fiat payout.
-
----
-
-## 4. The ranking rule
-
-When multiple anchors or corridors serve the same currency pair (e.g. USD → NGN),
-the route planner ranks them using a deterministic hierarchy:
-
-```text
-1. Proof Tier        ─── proven  >  verified  >  unverified
-2. Freshness         ─── Lower ledger staleness (more recently attested)
-3. Health Score      ─── Zero consecutive breaker failures  >  lanes with prior faults
-4. Economic Quality  ─── Higher net payout (destAmount) & lower fees via SEP-38 quotes
-5. Latency           ─── Faster historical settlement / reconciliation turnaround
-```
-
-### Determinism invariant
-
-The ranking rule must be **strictly deterministic**. Given the same intent,
-corridor candidates, and registry state, the planner must always produce the
-identical order.
-
-Why? The engine calls `resolve()` at two points:
-
-1. **First run:** Before the quote is requested.
-2. **Resume:** When recovering or reconciling after an unexpected restart.
-
-If the ranking rule relied on non-deterministic randomness or volatile metrics, a
-resumed payment could route reconciliation to the wrong anchor, leaving the
-actual settlement stranded.
-
----
-
-## 5. The fallback rule
-
-When the preferred route cannot be used, the planner applies the **Fallback Rule**:
-
-### Core invariant: fail closed, never silently weaken trust
-
-A fallback route must satisfy the **same or higher trust criteria** as the primary
-route.
-
-```text
-[ Primary Route: Attested Anchor A ] ─── Stale / Breaker Halted?
-                 │
-                 ├── YES ──► [ Candidate B: Attested Anchor B ] ─── Valid?
-                 │                                                   │
-                 │                                                   ├── YES ──► Route to B
-                 │                                                   └── NO  ──► Fail Closed (ROUTE_REFUSED)
-                 │
-                 └── NEVER silently fall back to an Unverified Anchor!
-```
-
-- If Candidate A was selected because it is `"attested"`, but its attestation
-  expired or its breaker tripped (`CORRIDOR_HALTED`), the planner evaluates
-  Candidate B.
-- If Candidate B also has a valid on-chain attestation and passing breaker health,
-  routing falls back to Candidate B.
-- If no alternative candidate has valid attestation evidence, the planner
-  **throws `UnattestedAnchorError`**. It does **not** fall back to an unverified
-  manifest route. Silently degrading to an unverified lane is the exact failure
-  mode the architecture is designed to prevent.
-
-### Pre-settle lock
-
-Fallback is strictly a **pre-settlement** mechanism. Once the engine enters
-`settling` and submits an on-chain Stellar transaction, the route is permanently
-locked to that anchor. A post-settlement error enters recovery (`refund_sender`,
-`hold`, or reconcile polling), never an alternative route fallback.
-
----
-
-## 6. The route types in plain words
-
-`corridor-in-a-box` categorizes counterparty endpoints into three distinct
-archetypes:
-
-### 1. SEP-31 (Direct Anchor-to-Anchor)
-
-- **What it is:** The Stellar standard designed specifically for B2B cross-border
-  payments between two licensed institutions (e.g., a sending PSP and a receiving
-  anchor).
-- **How it works:**
-  1. The sending business authenticates with the receiving anchor via SEP-10.
-  2. The sender submits recipient KYC via SEP-12.
-  3. The sender obtains a firm exchange rate via SEP-38 (`POST /quote`).
-  4. The sender registers the transaction via SEP-31 (`POST /transactions`) and
-     receives unique deposit instructions (a Stellar account and a memo).
-  5. The sender executes a single native Stellar payment of the bridge asset.
-  6. The sender polls `GET /transactions/:id` until the anchor completes fiat delivery.
-- **Why it is preferred:** Completely non-interactive, programmatic, and built for
-  unattended corporate remittances.
-
-### 2. SEP-6 (Programmatic Deposit/Withdrawal) with the Third-Party Caveat
-
-- **What it is:** A programmatic transfer API exposing `GET /info`, `POST /withdraw-exchange`,
-  and `GET /transaction`.
-- **The Third-Party Caveat:**
-  SEP-6 was originally authored for **first-party retail users** interacting directly
-  with an anchor (a user depositing or withdrawing their own funds). When used by
-  an enterprise payment engine:
-  - The remittance operator acts as a **third party** transferring funds on behalf
-    of an end customer.
-  - Many SEP-6 anchors require the on-chain payment to originate from a keypair
-    registered to the end user, or enforce KYC flows that assume direct retail
-    relationship.
-  - Some SEP-6 endpoints require browser interactions or CAPTCHAs for withdrawals,
-    which cannot run inside an unattended backend engine.
-  - **Rule:** A SEP-6 route is runnable only if the anchor's API explicitly permits
-    third-party programmatic payouts and non-interactive authentication.
-
-### 3. Wallets (Retail / Consumer Applications)
-
-- **What they are:** User-facing applications (e.g. Vibrant, Lobstr) that custody
-  keys, display balances, and render consumer UIs.
-- **Why they are NOT route destinations:**
-  - A wallet is a **client** of the network, not an anchor.
-  - Wallets do not expose public SEP-31 receive servers or SEP-6 transfer servers.
-  - In `contracts/anchors.json`, domains like `vibrantapp.com` are cataloged with
-    `kind: "other"` and explicit notes documenting that they are non-custodial
-    wallet apps without receive-side infrastructure.
-  - You cannot route a corridor into a wallet domain. Routing targets must be
-    registered, attested anchors capable of off-ramping value into local banking
-    or mobile money rails.
-
----
-
-## 7. How to plug in a custom planner
-
-Deployments are not locked into the built-in resolvers. You can plug in a custom
-planner (e.g. weighted by proprietary FX spreads, latency history, or volume quotas)
-**without forking the repository**.
-
-### Step 1: Implement the RouteResolver interface
-
-Create a TypeScript or JavaScript file exporting `apiVersion = 1` and a default
-factory:
-
-```ts
-import type { RouteDecision, RouteResolver, LoadResolverCtx } from "@corridor/router";
-import { ROUTE_RESOLVER_API_VERSION } from "@corridor/router";
 import type { Corridor } from "@corridor/manifest";
-import type { PaymentIntent } from "@corridor/types";
+import {
+  candidates,
+  filterByEvidence,
+  type AttestationSource,
+  type RouteOption,
+  type RoutePlanner,
+  type RouteRequest,
+} from "@corridor/router";
 
-export const apiVersion = ROUTE_RESOLVER_API_VERSION;
+class MyPlanner implements RoutePlanner {
+  constructor(
+    private readonly corridors: readonly Corridor[],
+    private readonly registry: AttestationSource,
+  ) {}
 
-interface CustomPlannerOptions {
-  preferredDomains?: string[];
-}
+  async plan(req: RouteRequest): Promise<ReadonlyArray<RouteOption>> {
+    // Step 1: configured corridors whose destination matches.
+    const { matching } = candidates(req, this.corridors);
 
-export default function createPlanner(
-  ctx: LoadResolverCtx,
-  options?: CustomPlannerOptions,
-): RouteResolver {
-  return {
-    async resolve(intent: PaymentIntent, corridor: Corridor): Promise<RouteDecision> {
-      // 1. Inspect intent and corridor
-      const domain = corridor.dest.endpoints.home_domain;
+    // Step 2: keep only anchors the registry vouches for.
+    const { kept, dropped } = await filterByEvidence(
+      matching.map((corridor) => ({
+        domain: corridor.dest.endpoints.home_domain,
+        protocol: corridor.dest.protocol,
+        corridor,
+      })),
+      { registry: this.registry },
+    );
 
-      // 2. Custom scoring / business logic
-      if (options?.preferredDomains?.includes(domain)) {
-        // High-priority route
-      }
-
-      // 3. Obtain adapter via the injected factory
-      const receiving = ctx.adapterFor(corridor);
-
-      // 4. Return RouteDecision
-      return {
-        receiving,
-        trust: "attested",
-      };
-    },
-  };
+    // Steps 3 to 7: lane check, limits, breaker, price, rank.
+    // Keep `dropped` and every reason: the sender and the audit trail need them.
+    // ...
+  }
 }
 ```
 
-### Step 2: Configure environment variables
+Your planner may rank differently from the rule above. If it does, document
+the rule, keep it deterministic, and keep the three labels.
 
-Point the deployment at your module via `.env` or container configuration:
+### 2. Prove it with `describePlannerContract`
 
-```sh
-CORRIDOR_RESOLVER_MODULE="./custom-planner.ts"
-CORRIDOR_RESOLVER_OPTIONS='{"preferredDomains":["cowrie.exchange"]}'
-pnpm serve
-```
+`@corridor/router/testing` ships the planner's contract as vitest cases:
 
-When booting, `packages/router/src/load.ts` dynamically imports the module,
-validates `apiVersion === 1`, checks that default-exported factory returns an
-object with `.resolve()`, and logs the active resolver.
+- an unattested option is never offered;
+- every dropped option carries a reason;
+- the same input yields the same order;
+- every label is `locked`, `indicative` or `estimated`.
 
-### Step 3: Verify with the conformance suite
-
-To guarantee that your custom planner does not violate engine safety invariants,
-run the contract test suite from `@corridor/router/testing`:
+The suite is structural. It needs `plan(input)` to return `{ offered, dropped }`,
+where each offered option has a `domain` and a `label` and each dropped option a
+`domain` and a `reason`. `RouteOption[]` alone has no place for dropped routes,
+so test through a thin wrapper that returns both. The fixtures must name at
+least one unattested domain in `input`:
 
 ```ts
-import { describe } from "vitest";
-import { describeResolverContract } from "@corridor/router/testing";
-import createPlanner from "./custom-planner";
+import { describePlannerContract } from "@corridor/router/testing";
 
-describeResolverContract(
-  "CustomPlanner",
-  (fixtures) => createPlanner({ adapterFor: () => fixtures.adapter }, {}),
-  {
-    unresolvable: { outcome: "rejects" },
-  },
-);
+describePlannerContract("MyPlanner", () => myPlannerWithDrops, {
+  input: myRouteRequest,
+  unattestedDomains: ["not-attested.example"],
+});
 ```
 
-The suite automatically asserts:
+The full contract, and `checkPlannerContract` / `expectPlannerContract` for
+asserting the suite fails a broken planner, are in
+[Conformance: `describePlannerContract`](route-resolver.md#conformance-describeplannercontract).
 
-1. Every decision carries a valid receiving `AnchorAdapter`.
-2. Calling `resolve()` twice with the same intent yields the identical destination.
-3. Refusals fail closed by throwing (no silent fallbacks).
-4. Any declared `split` weights sum exactly to 1.0.
+### 3. Hand the choice to the engine
 
----
+The planner chooses; the engine pays. What exists today to connect the two:
 
-## 8. Summary checklist for corridor operators
+- **The sender's choice on `POST /payments`.** `@corridor/service` accepts a
+  signed `routeOption` (corridor, receiving anchor, protocol, label and, for a
+  `locked` option, the quote the sender was shown). Sign it with
+  `signRouteOption()`. A locked quote reaches the engine as
+  `ExecuteOptions.quote`, so it is honoured, or refused once expired, instead
+  of being re-quoted at a different price.
+- **Pinning.** The engine stores the receiving domain and protocol on the run,
+  and `PinnedRouteResolver` resolves a resumed run only to that anchor.
+- **Your own `RouteResolver`.** To load custom resolution logic at deploy time,
+  follow [Writing your own](route-resolver.md#writing-your-own): export
+  `apiVersion` and a factory, point `CORRIDOR_RESOLVER_MODULE` at it, and run
+  `describeResolverContract` over it. Return a `ranking` from `resolve()` to
+  [record the choice](route-resolver.md#recording-the-choice) and its reasons
+  in the audit trail.
 
-- [ ] **Check attestation:** Verify the destination anchor using `pnpm probe:anchor <domain>` and confirm it has a valid on-chain record in the registry.
-- [ ] **Check protocol:** Confirm the corridor manifest sets `dest.protocol: sep31` or `sep6`, matching what the anchor serves.
-- [ ] **Check third-party permissions:** If using SEP-6, verify that the anchor permits unattended third-party settlement.
-- [ ] **Set breaker limits:** Configure `recovery.breaker.consecutive_failures` (default 3) to prevent burning fees on dead lanes.
-- [ ] **Audit liveness:** Ensure `endpoints_verified_at` is stamped once URLs are checked against `stellar.toml`.
-- [ ] **Run canaries:** Land a small transaction to earn the `proven` label before opening the lane to high-volume production traffic.
+[#604]: https://github.com/corridor-in-a-box/corridor-in-a-box/issues/604
+[#605]: https://github.com/corridor-in-a-box/corridor-in-a-box/issues/605
+[#606]: https://github.com/corridor-in-a-box/corridor-in-a-box/issues/606
+[#607]: https://github.com/corridor-in-a-box/corridor-in-a-box/issues/607
+[#608]: https://github.com/corridor-in-a-box/corridor-in-a-box/issues/608
+[#609]: https://github.com/corridor-in-a-box/corridor-in-a-box/issues/609
+[#610]: https://github.com/corridor-in-a-box/corridor-in-a-box/issues/610
+[#611]: https://github.com/corridor-in-a-box/corridor-in-a-box/issues/611
+[#612]: https://github.com/corridor-in-a-box/corridor-in-a-box/issues/612
+[#613]: https://github.com/corridor-in-a-box/corridor-in-a-box/issues/613
+[#626]: https://github.com/corridor-in-a-box/corridor-in-a-box/issues/626
+[#627]: https://github.com/corridor-in-a-box/corridor-in-a-box/issues/627
+[#644]: https://github.com/corridor-in-a-box/corridor-in-a-box/issues/644
+[#645]: https://github.com/corridor-in-a-box/corridor-in-a-box/issues/645
+[#646]: https://github.com/corridor-in-a-box/corridor-in-a-box/issues/646
+[#647]: https://github.com/corridor-in-a-box/corridor-in-a-box/issues/647
+[#648]: https://github.com/corridor-in-a-box/corridor-in-a-box/issues/648

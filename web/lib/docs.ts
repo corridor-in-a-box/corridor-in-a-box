@@ -146,35 +146,50 @@ and is the only state that may re-enter \`verifying\`. \`recovering\` and
   {
     slug: "route-planner",
     title: "Route planner",
-    description: "How routes are evaluated, ranked, and chosen.",
+    description: "How a route is chosen: steps, price labels, ranking and fallback.",
     body: `# Route planner: how a route is chosen
 
-\`corridor-in-a-box\` delegates receiving anchor selection to a **Route Planner**
-behind the \`RouteResolver\` seam. This page explains in plain words how a route is
-chosen for a payment.
+A sender says "send this amount to this country, in this currency". The route
+planner turns that into a ranked list of ways to pay, each with an honest price
+label and the reasons it ranked where it did. It only decides: the sending
+business's own signer executes the payment. The design is RFC 0004, sections 1, 2 and 5.
 
-## The six evaluation steps
+\`@corridor/router\` ships the planner's types and most of its steps as building
+blocks, including the reliability score (\`reliability()\`, #612). Ranking
+(#611) and automatic fallback (#626) are planned.
 
-1. **Candidate gathering:** Match the \`PaymentIntent\` against available corridor manifests.
-2. **Attestation gating:** Check the on-chain Soroban registry: does the anchor actively serve the declared protocol (\`sep31\` or \`sep6\`), is the attestation within the staleness bound (~1 week), and does the live TOML hash match? Fail closed if unattested.
-3. **Liveness & safety:** Exclude halted corridors (circuit breaker tripped after consecutive failures) and verify limits.
-4. **Ranking:** Sort candidates by proof tier (\`proven\` > \`verified\` > \`unverified\`), freshness, health, and pricing.
-5. **Decision:** Form an immutable \`RouteDecision\` with the receiving adapter and trust mode (\`"attested"\` or \`"manifest"\`).
-6. **Fallback:** If the primary route fails, fall back to the next qualified candidate without weakening trust. Never silently downgrade to an unverified lane.
+## The steps
+
+1. **Candidates:** configured corridors whose destination matches the requested currency and country (\`candidates()\`).
+2. **Evidence:** keep only anchors with a fresh registry attestation; unknown is refused (\`filterByEvidence()\`).
+3. **Lane check:** keep only receiving anchors that have onboarded this sending business (\`checkLane()\`).
+4. **Limits:** drop anchors whose limits exclude the amount, or that need details the request cannot supply.
+5. **Health:** drop anchors whose circuit breaker is open.
+6. **Price:** ask each anchor for a price and label it. No price and too little history means unpriceable, ranked last.
+7. **Rank:** order the rest and return every option, dropped ones with their reason.
 
 ## The three labels
 
-| Label | Meaning | Runnable? |
+| Label | Shown to the sender as | Source |
 |---|---|---|
-| **\`proven\`** | Real canary payment completed through this lane within \`max_age_days\` (default 30) with on-chain hashes. | Yes |
-| **\`verified\`** | Endpoints verified against published \`stellar.toml\` and on-chain attestation active. | Yes |
-| **\`unverified\`** | Declared in manifest but unconfirmed. Fails closed by default. | No |
+| **\`locked\`** | "Recipient gets ₦X. Locked for 60 s." | A firm SEP-38 quote. |
+| **\`indicative\`** | "About ₦X. Final amount set at payout." | The anchor's current price, not promised. |
+| **\`estimated\`** | "At least ₦X (estimated)" if guaranteed, otherwise "About ₦X (estimated)" | Rate history: P25 of the last 7 days, minus a 0.5% margin. |
+
+## Ranking and fallback
+
+- **Ranking:** by what the recipient gets, priced cautiously (locked as quoted; indicative and estimated minus the margin), then by reliability (this business's own success rate on the anchor over 30 days, scaled down for an old attestation), then by speed. Deterministic, with reasons on every option.
+- **Fallback:** before funds move (quote refused, KYC rejected, or opening the transaction failed), the run fails and a new run starts on the next option with the key \`<key>:alt1\`. After settlement starts, never switch; recovery follows the refund path.
 
 ## Route types in plain words
 
-- **SEP-31:** Direct anchor-to-anchor transfer standard for B2B remittances. Fully programmatic and unattended.
-- **SEP-6:** Programmatic deposit/withdraw. *The third-party caveat:* SEP-6 was designed for retail users; operators must verify that the anchor permits unattended third-party settlement without browser sessions.
-- **Wallets:** Non-custodial client apps (e.g. Vibrant). They are clients, not anchors, and cannot receive or settle corridors.
+- **SEP-31 (available):** anchor to anchor; the receiving anchor pays the recipient.
+- **SEP-6 (next):** the business withdraws straight to the recipient's account. *The third-party caveat:* SEP-6 was built for customers moving their own money, so it is offered only when the manifest declares \`third_party_payout: true\`, confirmed with the anchor. The flag is on main (#644); the planner rule that reads it is planned (#645).
+- **Wallet (in build):** a plain Stellar payment to the recipient's own wallet; the recipient cashes out later on their own.
+
+## Plugging in your own planner
+
+Implement \`RoutePlanner\` from \`@corridor/router\` using the step functions, prove it with \`describePlannerContract\` from \`@corridor/router/testing\`, and hand its choice to the engine through a signed \`routeOption\` on \`POST /payments\` or your own \`RouteResolver\` module.
 
 See the complete guide in \`docs/route-planner.md\` and \`docs/rfcs/0004-smart-router.md\`.
 `,

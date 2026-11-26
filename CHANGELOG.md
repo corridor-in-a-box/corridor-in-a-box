@@ -7,7 +7,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
-### Added — Route planner guide and RFC 0004 ([#620](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/620))
+### Added — Route planner guide ([#620](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/620))
+
+- `docs/route-planner.md` explains how a route is chosen, following RFC 0004 §1, §2 and
+  §5: the planner's steps, the three price labels (`locked`, `indicative`, `estimated`),
+  ranking by what the recipient gets priced cautiously then reliability then speed,
+  fallback to the next option with `<key>:alt1` before funds move, the route types (SEP-31,
+  SEP-6 with the third-party caveat, wallet), and how to plug in a custom `RoutePlanner`
+  and prove it with `describePlannerContract`. It marks which steps are on main and which
+  are planned (ranking #611, fallback #626, SEP-6 candidates #645).
+- `docs/README.md` indexes the guides and RFCs. The web docs site has a route planner
+  page, and `docs/route-resolver.md` and `README.md` link to the guide.
 
 - `docs/route-planner.md` documents how a route is chosen for businesses and
   contributors: the six evaluation steps, the three operational labels (`proven`,
@@ -18,6 +28,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   Smart Router and Route Planner.
 - `docs/README.md` provides an index of technical guides and RFCs.
 - `docs/route-resolver.md` and `README.md` link to the new guide.
+
 ### Added — `reliability()` score for receiving anchors ([#612](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/612))
 
 - `reliability(anchor, deps)` in `@corridor/router` scores a receiving anchor from 0 to 1 (RFC
