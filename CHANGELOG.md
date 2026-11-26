@@ -19,6 +19,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   (at least 7 days of data and 100 samples in the last 7 days), with the counts behind it.
 - With no source configured, an unreadable source, or no data for a pair, the chart shows an
   empty state and no numbers.
+
 ### Added — estimate gap when a business guarantees estimated prices ([#627](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/627))
 
 - With `guaranteeEstimates` on (`EngineDeps` or `ExecuteOptions`, RFC 0004 D4), the engine
