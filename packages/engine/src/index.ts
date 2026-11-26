@@ -198,3 +198,18 @@ export {
   type Sep38PollResult,
   type Sep38TomlEndpoints,
 } from "./rate-collector-sep38";
+export {
+  DEFAULT_COLLECTOR_INTERVAL_MS,
+  DEFAULT_MAX_JITTER_MS,
+  RateCollectorLoop,
+  startRateCollectorLoop,
+  parseCollectorInterval,
+  parseCollectorJitter,
+  defaultSleep,
+  type CollectorStep,
+  type CollectorStepFn,
+  type CollectorStepResult,
+  type RateCollectorCycleResult,
+  type RateCollectorLoopOptions,
+  type RateCollectorLoopStats,
+} from "./rate-collector-loop";

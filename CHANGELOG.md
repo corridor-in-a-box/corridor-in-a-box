@@ -18,6 +18,44 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   Smart Router and Route Planner.
 - `docs/README.md` provides an index of technical guides and RFCs.
 - `docs/route-resolver.md` and `README.md` link to the new guide.
+### Added — `reliability()` score for receiving anchors ([#612](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/612))
+
+- `reliability(anchor, deps)` in `@corridor/router` scores a receiving anchor from 0 to 1 (RFC
+  0004): the business's own success rate on it over 30 days, shrunk toward 0.5 below 20 runs,
+  and multiplied by an attestation-age factor that reaches 0 at the one-week freshness bound. No
+  attestation scores 0. The rules are documented in `docs/route-resolver.md` ("Reliability").
+
+### Added — rate collector loop with 15-minute schedule, jitter, and overlap guard ([#593](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/593))
+
+- `RateCollectorLoop` in `@corridor/engine` runs a list of collector steps (`{ name, run }`) on a
+  15-minute schedule by default (RFC 0004 §3). Each run starts after a random jitter (default up
+  to 5 s), a tick is skipped while the previous run is still going (`skipCount`,
+  `corridor.rate_collector.skipped_overlap`), one step failing does not stop the others, and
+  `stop()` cancels a pending jitter and waits for the run in flight.
+- `pnpm rate:collector` (`examples/run-rate-collector.ts`) is the always-on process. Its steps
+  are the real collectors: `sep38_prices` calls `pollSep38Prices` (#590) for the registry's
+  attested anchors on `STELLAR_NETWORK` plus `RATE_COLLECTOR_SEP38_ANCHORS`, and `dex_trades`
+  calls `collectDexTrades` (#591) for the pairs in `config/dex-pairs.json` over the last 24 hours
+  of complete 15-minute buckets. Every sample is written to Postgres (`DATABASE_URL`, required)
+  through `PostgresRateHistoryStore.recordFlaggingOutliers`. A step with nothing configured is
+  left out. It stops cleanly on `SIGTERM` / `SIGINT`.
+- `.env.example` documents `RATE_COLLECTOR_INTERVAL_MS`, `RATE_COLLECTOR_INTERVAL_SECONDS`,
+  `RATE_COLLECTOR_JITTER_MS`, `RATE_COLLECTOR_RUN_ON_START`, `RATE_COLLECTOR_SEP38_ANCHORS` and
+  `RATE_COLLECTOR_DEX_PAIRS`.
+
+### Added — `third_party_payout` flag for SEP-6 corridors ([#644](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/644))
+
+- A `protocol: sep6` dest can declare `third_party_payout: true` when the anchor has
+  confirmed it lets a business withdraw to a third party, which cannot be probed (RFC 0004 §5).
+  `third_party_payout_note`, recording who confirmed it and when, is required when the flag
+  is `true`.
+- `@corridor/manifest` refuses the flag and its note on every non-SEP-6 dest (`sep31`,
+  `wallet`, `custom:<id>`, legacy dests with no `protocol`), refuses any non-boolean form
+  (object, string, `null`), and refuses an empty note. All three rules live in one check that
+  reads the raw dest, so a protocol schema can no longer drop the field silently.
+- `allowsThirdPartyPayout(corridor)` is exported for the router: `true` only for a SEP-6 dest
+  with `third_party_payout: true`. Documented in `docs/sep-coverage.md`.
+
 ### Added — wallet route: settlement to a recipient account ([#647](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/647))
 
 - `WalletAdapter` in `@corridor/stellar` implements the anchor seam for a

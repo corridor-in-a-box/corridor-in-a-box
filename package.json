@@ -36,6 +36,7 @@
     "example:plan-and-pay": "tsx examples/plan-and-pay.ts",
     "testnet": "tsx examples/run-testnet.ts",
     "serve": "tsx examples/run-service.ts",
+    "rate:collector": "tsx examples/run-rate-collector.ts",
     "verify:settle": "tsx examples/verify-settle-leg.ts",
     "verify:corridor": "tsx examples/verify-corridor.ts",
     "load-test": "tsx examples/load-test.ts",

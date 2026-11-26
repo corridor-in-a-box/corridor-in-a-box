@@ -85,6 +85,21 @@ const Sep6DestSchema = AnchorBaseSchema.extend({
     quote_server: z.string().url().optional(),
     endpoints_verified_at: AnchorEndpointsSchema.shape.endpoints_verified_at,
   }),
+  /**
+   * Whether this SEP-6 receiving anchor lets the business withdraw to a THIRD
+   * party, i.e. pay out to someone other than the account holder (#644, RFC 0004
+   * §5). SEP-6 was built for users withdrawing their own funds; only some anchors
+   * allow third-party payouts, and neither stellar.toml nor SEP-6 `GET /info`
+   * says which, so a human has to confirm it with the anchor and record it here.
+   * Boolean only. Read it through `allowsThirdPartyPayout()`.
+   */
+  third_party_payout: z.boolean().optional(),
+  /**
+   * Who confirmed third-party payout support with the anchor, and when, e.g.
+   * "Confirmed by <name> at <anchor>, 2026-11-20, support ticket #123".
+   * Required when `third_party_payout` is true.
+   */
+  third_party_payout_note: z.string().min(1).optional(),
 });
 
 const CustomDestSchema = AnchorBaseSchema.extend({
@@ -148,14 +163,88 @@ export const WalletDestinationSchema = z
     }
   });
 
+/**
+ * The one place the `third_party_payout` rules live (#644). It runs on the RAW
+ * dest, before the protocol schemas: those strip keys they do not declare, so a
+ * flag on a non-SEP-6 dest would otherwise vanish silently instead of failing.
+ *  - only `protocol: sep6` may carry `third_party_payout` or its note;
+ *  - the flag is a boolean, nothing else (no object or string form);
+ *  - `third_party_payout: true` needs a non-empty `third_party_payout_note`.
+ */
+function checkThirdPartyPayout(dest: Record<string, unknown>, ctx: z.RefinementCtx): void {
+  const hasFlag = dest.third_party_payout !== undefined;
+  const hasNote = dest.third_party_payout_note !== undefined;
+  if (dest.protocol !== "sep6") {
+    const got = typeof dest.protocol === "string" ? dest.protocol : String(dest.protocol);
+    for (const [key, present] of [
+      ["third_party_payout", hasFlag],
+      ["third_party_payout_note", hasNote],
+    ] as const) {
+      if (present) {
+        ctx.addIssue({
+          code: "custom",
+          path: [key],
+          message: `only permitted on protocol "sep6", got "${got}"`,
+        });
+      }
+    }
+    return;
+  }
+  if (hasFlag && typeof dest.third_party_payout !== "boolean") {
+    ctx.addIssue({
+      code: "custom",
+      path: ["third_party_payout"],
+      message: `expected true or false, got ${describeValue(dest.third_party_payout)}`,
+    });
+  }
+  const note = dest.third_party_payout_note;
+  if (hasNote && (typeof note !== "string" || note.trim() === "")) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["third_party_payout_note"],
+      message: "expected a non-empty string",
+    });
+  } else if (dest.third_party_payout === true && !hasNote) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["third_party_payout_note"],
+      message:
+        "required when third_party_payout is true: record who confirmed it with the anchor, and when",
+    });
+  }
+}
+
+function describeValue(v: unknown): string {
+  if (v === null) return "null";
+  return Array.isArray(v) ? "an array" : typeof v === "object" ? "an object" : `a ${typeof v}`;
+}
+
+/**
+ * Whether a parsed corridor may pay a third party through its SEP-6 dest: true
+ * only for `protocol: sep6` with `third_party_payout: true`. Anything else,
+ * including an absent flag, is false — the safe default, since this cannot be
+ * probed. Exported so the router reads the flag the same way the manifest does.
+ */
+export function allowsThirdPartyPayout(corridor: Pick<Corridor, "dest">): boolean {
+  const dest = corridor.dest;
+  return (
+    dest.protocol === "sep6" &&
+    "third_party_payout" in dest &&
+    dest.third_party_payout === true
+  );
+}
+
 // A discriminated union discriminates before defaults apply, so default an
 // absent `protocol` to "sep31" first (existing manifests unchanged), the same
 // way SourceAnchorSchema defaults to "prefunded".
 export const DestSchema = z.preprocess(
-  (raw) =>
-    raw && typeof raw === "object" && !Array.isArray(raw) && !("protocol" in raw)
-      ? { ...raw, protocol: "sep31" }
-      : raw,
+  (raw, ctx) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+    const dest =
+      "protocol" in raw ? (raw as Record<string, unknown>) : { ...raw, protocol: "sep31" };
+    checkThirdPartyPayout(dest, ctx);
+    return dest;
+  },
   z
     .discriminatedUnion("protocol", [Sep31DestSchema, Sep6DestSchema, WalletDestSchema])
     .or(CustomDestSchema),

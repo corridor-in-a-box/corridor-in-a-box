@@ -50,6 +50,12 @@ samples into Postgres (`rate_samples`, created by
 running it keeps the project non-custodial. It does not run on GitHub
 Actions, whose schedules are too unreliable for a 15-minute cadence.
 
+Run it with `DATABASE_URL=postgres://... pnpm rate:collector`
+(`examples/run-rate-collector.ts`, a `RateCollectorLoop` from
+`packages/engine/src/rate-collector-loop.ts`). Each run polls SEP-38 prices
+and then reads the DEX pairs; a run that is still going when the next one is
+due makes that next one skip. The settings are in `.env.example`.
+
 ## Daily summary
 
 Per RFC 0004 §3, a daily summary per pair is the **min, P25, median, P75,
