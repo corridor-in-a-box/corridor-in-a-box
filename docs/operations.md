@@ -270,6 +270,55 @@ moving twice, and also exits `5`. The verdict, the trail, the settlement and
 that count are appended to `$GITHUB_STEP_SUMMARY` (`SUMMARY_FILE` outside
 Actions) under the title in `SCENARIO`.
 
+#### The published run history
+
+The nightly `reference-corridor` workflow appends one machine-readable record
+per run to `web/lib/generated/reference-runs.json` and commits it:
+
+```json
+{
+  "runs": [
+    {
+      "runId": 43969161708,
+      "date": "2026-11-17T05:43:00.000Z",
+      "outcome": "success",
+      "durationSeconds": 631,
+      "trail": ["created", "quoted", "completed"],
+      "txHashes": ["81c46422…"],
+      "runUrl": "https://github.com/corridor-in-a-box/corridor-in-a-box/actions/runs/43969161708"
+    }
+  ]
+}
+```
+
+Newest first, capped at 180 runs. Failed and cancelled runs are recorded too — a
+success rate needs denominators — and a re-run of the same workflow run id
+replaces its record. `pnpm record:reference-run` writes it (`GITHUB_RUN_ID`,
+`RUN_STARTED_AT`, `RUN_FINISHED_AT`, `CORRIDOR_EXIT`, `RUN_CANCELLED` and
+`RUN_LOG` are its inputs), and `web/lib/reference-runs.ts` reads it, including
+the latest entry the dashboard's `#586` panel shows, so both views come from one
+source.
+
+The write happens in two jobs, so the token that can push never sits next to the
+signing keys:
+
+- `corridor` (`permissions: contents: read`) runs the corridor with the signer,
+  keeps the runner's own exit status through the `tee` into `corridor-run.log`,
+  and always uploads a `reference-run-<run id>` artifact: the run's start and
+  finish times, exit status and whether it was cancelled, plus only the `trail:`
+  and transaction lines of the log (GitHub masks secrets in step logs, not in
+  artifacts).
+- `publish-history` (`needs: corridor`, `if: always()`,
+  `permissions: contents: write`) reads no secrets and installs nothing. It runs
+  the recorder with Node's built-in TypeScript type stripping, commits the file
+  and pushes. If the push is rejected because something landed meanwhile, it
+  starts again from the new tip, up to three times. A missing artifact (the
+  corridor job died before saving it) is still recorded, as a failure.
+
+The push needs the workflow token to be allowed to write to the branch it runs
+on. If branch protection on `main` blocks that, allow `github-actions[bot]` or
+move the record to an unprotected data branch and read it from there.
+
 ### `pnpm verify:crash-resume` — kill the service after settle
 
 ```bash

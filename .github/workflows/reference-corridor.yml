@@ -20,6 +20,12 @@ jobs:
     # The stack is minutes to boot and the corridor waits on the observer's own
     # cadence, but a hung container must not burn an hour of runner time.
     timeout-minutes: 30
+    # Read-only, deliberately. This job holds the signing keys and runs
+    # `pnpm install`, so it must never also hold a token that can push. The run's
+    # record is handed to `publish-history` below as an artifact, and that job,
+    # with no secrets and no install, is the one allowed to write.
+    permissions:
+      contents: read
     # Job-level, deliberately. The `secrets` context is NOT available in a
     # step-level `if:` — using it there is not a no-op, it makes the whole
     # workflow file invalid, and GitHub then fails every run at 0s without ever
@@ -47,6 +53,11 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+
+      # The recorded duration is wall-clock from here, so it includes the stack
+      # booting — the cost a trend should show, not just the payment itself.
+      - name: Note when the run started
+        run: echo "RUN_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
 
       # --- guards, before anything is stood up or signed -------------------
 
@@ -135,9 +146,49 @@ jobs:
           scripts/reference-anchor.sh payout-watch > anchor-logs/payout-watch.log 2>&1 &
           watcher=$!
           trap 'kill "$watcher" 2>/dev/null || true' EXIT
-          pnpm verify:corridor
+          # Keep the output for the history record below, and keep the runner's
+          # own exit status: a pipe into tee must not turn a failure into a pass.
+          set +e
+          pnpm verify:corridor 2>&1 | tee corridor-run.log
+          status=${PIPESTATUS[0]}
+          set -e
+          echo "CORRIDOR_EXIT=$status" >> "$GITHUB_ENV"
+          exit "$status"
         env:
           CORRIDOR_SIGNER_SECRET: ${{ env.SIGNER_SECRET }}
+
+      # --- the published history (issue #680) ------------------------------
+
+      # Hands this run's facts to `publish-history`. It runs even when the
+      # corridor failed: a history of green runs only cannot show a success rate.
+      # Only the lines the recorder reads (the trail and the settle tx) leave this
+      # job, not the whole log, because GitHub masks secrets in step logs but not
+      # inside artifacts.
+      - name: Save the run's facts for the history
+        if: ${{ always() }}
+        run: |
+          mkdir -p reference-run
+          {
+            echo "RUN_STARTED_AT=${RUN_STARTED_AT:-}"
+            echo "RUN_FINISHED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "CORRIDOR_EXIT=${CORRIDOR_EXIT:-}"
+            if [ "$JOB_STATUS" = "cancelled" ]; then echo "RUN_CANCELLED=true"; fi
+          } > reference-run/facts.env
+          if [ -f corridor-run.log ]; then
+            grep -E '^trail:|stellar tx:|explorer:' corridor-run.log > reference-run/corridor-run.log || true
+          fi
+        env:
+          # Not `cancelled()`: the status functions are only valid in `if:`, and
+          # using one anywhere else makes the whole workflow file invalid.
+          JOB_STATUS: ${{ job.status }}
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ always() }}
+        with:
+          name: reference-run-${{ github.run_id }}
+          path: reference-run/
+          retention-days: 7
+          if-no-files-found: warn
 
       # The fault scenario (#678): the same whole corridor, but the anchor
       # refunds instead of completing, and EXPECT_STATE=refunded makes that the
@@ -171,6 +222,73 @@ jobs:
       - name: Tear down
         if: ${{ always() }}
         run: scripts/reference-anchor.sh down
+
+  # Commits the corridor job's record to web/lib/generated/reference-runs.json
+  # (issue #680). A job of its own so the token that can push never sits next to
+  # the signing keys or a `pnpm install`: this job reads no secrets and installs
+  # nothing — the recorder runs on Node's own TypeScript type stripping. It runs
+  # whatever the corridor's result, because a failed or cancelled night counts.
+  publish-history:
+    needs: corridor
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      # Missing only when the corridor job died before it could save the facts.
+      # The recorder then still writes the night down as a failure rather than
+      # leaving a gap in the success rate.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        continue-on-error: true
+        with:
+          name: reference-run-${{ github.run_id }}
+          path: reference-run/
+
+      # A re-run of this workflow run replaces its record rather than adding a
+      # second one. A pull request can land while the corridor settles, so on a
+      # rejected push this starts again from the new tip and records again — the
+      # record is keyed by run id, so that never duplicates it.
+      - name: Record and publish the history
+        env:
+          RUN_LOG: reference-run/corridor-run.log
+          RUN_CANCELLED: ${{ needs.corridor.result == 'cancelled' }}
+        run: |
+          set -euo pipefail
+          # Known keys with non-empty values only; anything else in the file is ignored.
+          if [ -f reference-run/facts.env ]; then
+            while IFS='=' read -r key value; do
+              case "$key" in
+                RUN_STARTED_AT | RUN_FINISHED_AT | CORRIDOR_EXIT | RUN_CANCELLED)
+                  if [ -n "$value" ]; then export "$key=$value"; fi
+                  ;;
+              esac
+            done < reference-run/facts.env
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for attempt in 1 2 3; do
+            git fetch --depth=1 origin "$GITHUB_REF_NAME"
+            git reset --hard FETCH_HEAD
+            node --experimental-strip-types scripts/record-reference-run.ts
+            git add web/lib/generated/reference-runs.json
+            if git diff --cached --quiet; then
+              echo "history already records run $GITHUB_RUN_ID"
+              exit 0
+            fi
+            git commit -m "chore(reference-runs): record nightly run $GITHUB_RUN_ID"
+            if git push origin "HEAD:$GITHUB_REF_NAME"; then
+              exit 0
+            fi
+            sleep $((attempt * 5))
+          done
+          echo "::error::could not publish web/lib/generated/reference-runs.json"
+          exit 1
 
   # The same stack and the same quote path as the job above, but deliberately
   # too late: the firm quote is requested with a short SEP-38 `expire_after`,
