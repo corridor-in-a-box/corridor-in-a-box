@@ -457,6 +457,7 @@ components:
         - DRY_RUN_COMPLETE
         - ROUTE_REFUSED
         - ROUTE_OPTION_INVALID
+        - ROUTE_PINNED
     EngineError:
       type: object
       required: [error, message]

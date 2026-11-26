@@ -257,6 +257,11 @@ export const STATUS_BY_CODE: Record<CorridorErrorCode, number> = {
   // Raised by the service before the engine runs. The response status follows the
   // failed check (400 bad signature, 409 expired, 422 otherwise); 422 is the default.
   ROUTE_OPTION_INVALID: 422,
+  // A run that has reached settling was resumed against a different receiving
+  // domain than the one it opened with. 409: the run is pinned once settlement
+  // starts, so the re-route is a conflict the caller cannot resolve by retrying
+  // the same key — the stored run is left untouched and resumable. See RFC 0004.
+  ROUTE_PINNED: 409,
 };
 
 /** Token-bucket rate limiter, keyed per client. In-memory; swap for Redis at scale. */

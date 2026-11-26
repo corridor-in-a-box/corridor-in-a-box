@@ -18,6 +18,31 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   are planned (ranking #611, fallback #626, SEP-6 candidates #645).
 - `docs/README.md` indexes the guides and RFCs. The web docs site has a route planner
   page, and `docs/route-resolver.md` and `README.md` link to the guide.
+### Added — Fall back to the next route before funds move ([#626](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/626))
+
+- When the primary route fails before any funds move (a refused quote, a KYC rejection, or a
+  transaction that cannot be opened), the engine tries the resolver's alternates as linked runs
+  under `<key>:alt1`, `<key>:alt2`, up to `maxAlternates` (default 2; `0` turns fallback off).
+  Once a run reaches `settling`, no other route is tried.
+- A resumed run whose route now resolves to a different receiving domain than the one stored on
+  the run (#734) is refused with `ROUTE_PINNED`.
+- The router's resolver option type is `RouteCandidate`, so it does not clash with the planner's
+  RFC 0004 `RouteOption`.
+
+### Added — router ranking function ([#611](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/611))
+
+- `rank(options, { estimateMarginBps })` in `@corridor/router` orders route options per RFC 0004
+  §1 "Ranking": by the cautious recipient amount, then reliability, then delivery time, then
+  receiving domain, with no hidden weights. It is pure: it returns a new array and never
+  changes its input, and options equal on every key keep their input order.
+- The cautious amount comes from the price label: a `locked` amount as quoted, an `indicative`
+  or `estimated` (P25) amount minus the estimate margin (default 50 bps, RFC 0004 D3).
+  `cautiousRecipientAmount` exposes that step. Amounts stay decimal strings on scaled BigInts.
+- Domains compare by code unit, so the order is the same under every locale. A malformed or
+  negative amount, an unknown label, a reliability outside 0..1 or options in different assets
+  throw a `RangeError` instead of ranking silently wrong.
+- A full `RouteOption` can be ranked directly. Property tests use the repo's seeded generator:
+  the result is a permutation of the input and stable for equal inputs.
 
 ### Added — estimate gap when a business guarantees estimated prices ([#627](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/627))
 
