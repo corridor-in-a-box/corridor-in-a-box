@@ -6,9 +6,12 @@ import { LivenessLegend } from "@/components/LivenessLegend";
 import { AttestedAnchorsSection } from "@/components/AttestedAnchorsSection";
 import { NetworkSwitch } from "@/components/NetworkSwitch";
 import { NoRegistry } from "@/components/NoRegistry";
+import { RateHistoryChart } from "@/components/RateHistoryChart";
 import { RegistryFreshness } from "@/components/RegistryFreshness";
 import { corridors, liveness } from "@/lib/corridors";
 import { NETWORK_LABEL, type NetworkId } from "@/lib/network";
+import { fetchRateSummaries } from "@/lib/rate-summaries";
+import { buildRateHistory } from "@/lib/rates";
 import { fetchAttestations, registryId, REGISTRY_NETWORK } from "@/lib/registry";
 
 // Anchor facts are read from the chain at request time, not baked in at build.
@@ -22,10 +25,12 @@ type Snapshot = Awaited<ReturnType<typeof fetchAttestations>>;
 export default async function Home() {
   // Both networks are read here, so the cached page already holds each of them and the switch
   // only chooses which to show. A network with no registry costs nothing: nothing is called.
-  const [testnet, mainnet] = await Promise.all([
+  const [testnet, mainnet, rateSummaries] = await Promise.all([
     fetchAttestations("testnet"),
     fetchAttestations("public"),
+    fetchRateSummaries(),
   ]);
+  const rateHistory = buildRateHistory(rateSummaries.summaries);
   const verifiedCount = corridors.filter((c) => {
     const state = liveness(c).state;
     return state === "verified" || state === "proven";
@@ -104,6 +109,18 @@ export default async function Home() {
           panels={{
             testnet: <AnchorPanel network="testnet" snapshot={testnet} />,
             public: <AnchorPanel network="public" snapshot={mainnet} />,
+          }}
+        />
+      </section>
+
+      {/* Rate history per currency pair, from the published daily summaries */}
+      <section className="flex flex-col gap-5">
+        <RateHistoryChart
+          histories={rateHistory}
+          status={{
+            ok: rateSummaries.ok,
+            configured: rateSummaries.configured,
+            error: rateSummaries.error,
           }}
         />
       </section>

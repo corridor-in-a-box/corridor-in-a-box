@@ -30,7 +30,6 @@ export default defineConfig(({ mode }) => {
         "@corridor/otel": r("./packages/otel/src/index.ts"),
         "@corridor/cli/wire": r("./packages/cli/src/wire.ts"),
         "@corridor/cli": r("./packages/cli/src/index.ts"),
-        "@": r("./web"),
       },
     },
     test: {

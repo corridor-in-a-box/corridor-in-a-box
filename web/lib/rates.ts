@@ -1,285 +1,236 @@
-// Rate history data and utilities for the corridor-in-a-box dashboard.
+// Rate history chart data, built only from the published daily summaries.
 //
-// RFC 0004 Smart Router routing intelligence uses rate stability and percentile
-// bands (P25) to determine estimated pricing and route confidence. Gaps indicate
-// periods where an anchor had downtime, was unprobed, or published no rates.
+// Every number here comes from `fetchRateSummaries()` (web/lib/rate-summaries.ts), the
+// validated daily summary per pair and source (RFC 0004 §3). Nothing is generated or assumed:
+// a day a source has no summary for, or a summary with no samples, is a gap, and the chart
+// breaks its line there instead of drawing through it.
 
-export interface DailyRatePoint {
-  /** ISO date string "YYYY-MM-DD" */
-  readonly date: string;
-  /** Market reference rate for the day (e.g. mid-market benchmark) */
-  readonly referenceRate: number;
-  /** 25th percentile threshold rate used for router estimates */
-  readonly p25: number;
-  /**
-   * Anchor rate on this date.
-   * `null` explicitly indicates that no rate data was collected (gap).
-   */
-  readonly rates: Record<string, number | null>;
-}
+import type { RateSummary } from "./rate-summaries";
 
-export interface CurrencyPairRateHistory {
-  readonly pair: string;
-  readonly displayPair: string;
-  readonly sourceAsset: string;
-  readonly destAsset: string;
-  readonly baseSpreadBps: number;
-  readonly referenceRate: number;
-  readonly anchors: readonly string[];
-  readonly points: readonly DailyRatePoint[];
-  readonly stabilityScore: "high" | "moderate" | "volatile";
-  readonly estimatedEligible: boolean;
-}
-
-export interface DailySummaryResponse {
-  readonly pairs: CurrencyPairRateHistory[];
-}
+/** Days the chart shows per pair, counted back from the newest summary for that pair. */
+export const RATE_HISTORY_CHART_DAYS = 30;
 
 /**
- * Deterministic pseudo-random number generator for stable mock rate history.
+ * RFC 0004 §3 minimum-data rule: an anchor gets the `estimated` label only with at least 7 days
+ * of data and at least 100 samples in the window. The router applies the same defaults to raw
+ * samples (`DEFAULT_MIN_ESTIMATE_SPAN_DAYS` and `DEFAULT_MIN_ESTIMATE_SAMPLES` in
+ * packages/router/src/estimated-price.ts); the web app is outside the workspace, so they are
+ * restated here.
  */
-function seededRandom(seed: number): () => number {
-  let s = seed;
-  return () => {
-    s = (s * 9301 + 49297) % 233280;
-    return s / 233280;
+export const MIN_ESTIMATE_DAYS = 7;
+export const MIN_ESTIMATE_SAMPLES = 100;
+/** The estimate window, in days (RFC 0004 D3: P25 of the last 7 days). */
+export const ESTIMATE_WINDOW_DAYS = 7;
+
+const DAY_MS = 86_400_000;
+
+/**
+ * Whether a source's published summaries meet the minimum-data rule, and the counts behind it.
+ *
+ * - `daysWithData`: distinct UTC days that have a summary with at least one sample.
+ * - `samplesInWindow`: samples summed over the 7 UTC days ending today (`windowStart`..`windowEnd`).
+ *
+ * This reads daily summaries, not raw samples, so it is what the published data shows; the
+ * router still decides on the raw samples when it prices a route.
+ */
+export interface MinimumDataStatus {
+  readonly daysWithData: number;
+  readonly samplesInWindow: number;
+  readonly windowStart: string;
+  readonly windowEnd: string;
+  readonly meetsRule: boolean;
+}
+
+export interface RateHistorySeries {
+  readonly source: string;
+  /** A reference FX series is drawn as the reference line and is not an anchor. */
+  readonly kind: "anchor" | "reference";
+  /** One entry per `dates` entry; `null` is a gap (no summary, or no samples that day). */
+  readonly points: readonly (RateSummary | null)[];
+  /** Only for anchor series: the reference rate is not priced, so the rule does not apply. */
+  readonly minimumData?: MinimumDataStatus;
+}
+
+export interface PairRateHistory {
+  readonly pair: string;
+  /** Every UTC day from the first to the last summary shown, with no day skipped. */
+  readonly dates: readonly string[];
+  readonly series: readonly RateHistorySeries[];
+}
+
+const toDayMs = (date: string) => Date.parse(`${date}T00:00:00Z`);
+const fromDayMs = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+
+/**
+ * A source is the reference line only when it is the reference FX source (`reference_fx` in
+ * packages/engine/src/rate-samples-pg.ts), optionally qualified, e.g. `reference_fx:provider`.
+ */
+export function isReferenceSource(source: string): boolean {
+  return /^reference_fx(?::|$)/.test(source);
+}
+
+/** Normalises a pair or asset code for matching: `iso4217:NGN` and `NGN` are the same currency. */
+const normaliseAsset = (asset: string) => asset.trim().replace(/^iso4217:/i, "").toUpperCase();
+
+/** The summary pair a corridor's source and destination assets name, e.g. `USDC/NGN`. */
+export function corridorPair(sourceAsset: string, destAsset: string): string {
+  return `${normaliseAsset(sourceAsset)}/${normaliseAsset(destAsset)}`;
+}
+
+/** Whether a summary pair names the given pair, ignoring `iso4217:` prefixes and case. */
+export function pairMatches(pair: string, wanted: string): boolean {
+  const split = (p: string) => p.split("/").map(normaliseAsset).join("/");
+  return split(pair) === split(wanted);
+}
+
+export function minimumDataStatus(
+  summaries: readonly RateSummary[],
+  now: Date = new Date(),
+): MinimumDataStatus {
+  const todayMs = toDayMs(now.toISOString().slice(0, 10));
+  const windowStartMs = todayMs - (ESTIMATE_WINDOW_DAYS - 1) * DAY_MS;
+  const days = new Set<string>();
+  let samplesInWindow = 0;
+  for (const s of summaries) {
+    if (s.sampleCount <= 0) continue;
+    const dayMs = toDayMs(s.date);
+    if (dayMs > todayMs) continue;
+    days.add(s.date);
+    if (dayMs >= windowStartMs) samplesInWindow += s.sampleCount;
+  }
+  return {
+    daysWithData: days.size,
+    samplesInWindow,
+    windowStart: fromDayMs(windowStartMs),
+    windowEnd: fromDayMs(todayMs),
+    meetsRule: days.size >= MIN_ESTIMATE_DAYS && samplesInWindow >= MIN_ESTIMATE_SAMPLES,
   };
 }
 
 /**
- * Formats a Date object to YYYY-MM-DD.
+ * Groups daily summaries into one chart per pair: one series per source, aligned to a run of
+ * consecutive days so a missing day shows as a gap. Pairs and sources come out sorted.
  */
-function formatDate(d: Date): string {
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(d.getUTCDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
+export function buildRateHistory(
+  summaries: readonly RateSummary[],
+  options: { now?: Date; days?: number } = {},
+): PairRateHistory[] {
+  const now = options.now ?? new Date();
+  const chartDays = options.days ?? RATE_HISTORY_CHART_DAYS;
 
-/**
- * Builds 30 days of historical rate data for a currency pair.
- * Incorporates realistic volatility, reference rate, P25 estimate band,
- * and deliberate gaps where data was not collected.
- */
-function generatePairHistory(
-  pair: string,
-  displayPair: string,
-  sourceAsset: string,
-  destAsset: string,
-  baseRate: number,
-  anchors: string[],
-  seed: number,
-  gapDaysForAnchor: Record<string, number[]>,
-): CurrencyPairRateHistory {
-  const rng = seededRandom(seed);
-  const days = 30;
-  const now = new Date(Date.UTC(2026, 10, 22)); // 2026-11-22
-  const points: DailyRatePoint[] = [];
-
-  // Slight drift for reference rate over 30 days
-  let currentRef = baseRate;
-
-  for (let i = days - 1; i >= 0; i--) {
-    const d = new Date(now.getTime() - i * 86_400_000);
-    const dateStr = formatDate(d);
-
-    // Reference rate drifts by up to ±0.2% daily
-    const dailyDrift = (rng() - 0.49) * 0.004 * baseRate;
-    currentRef = Math.round((currentRef + dailyDrift) * 10000) / 10000;
-
-    // Anchor rates and P25 computation
-    const rates: Record<string, number | null> = {};
-    const validRates: number[] = [];
-
-    for (const anchor of anchors) {
-      const gaps = gapDaysForAnchor[anchor] ?? [];
-      const dayIndex = days - 1 - i;
-      if (gaps.includes(dayIndex)) {
-        // Gap! No data was collected on this date for this anchor
-        rates[anchor] = null;
-      } else {
-        // Individual anchor spreads (between -0.5% and +0.8% of reference)
-        const spread = (rng() - 0.45) * 0.01 * currentRef;
-        const rate = Math.round((currentRef + spread) * 10000) / 10000;
-        rates[anchor] = rate;
-        validRates.push(rate);
-      }
-    }
-
-    // P25 band: 25th percentile of collected rates (or conservative 0.5% below reference if few)
-    let p25Val: number;
-    if (validRates.length > 0) {
-      validRates.sort((a, b) => a - b);
-      const p25Index = Math.floor(validRates.length * 0.25);
-      const calculatedP25 = validRates[p25Index];
-      // Bound P25 slightly below reference to form a meaningful estimate band
-      p25Val = Math.min(calculatedP25, Math.round(currentRef * 0.994 * 10000) / 10000);
-    } else {
-      p25Val = Math.round(currentRef * 0.994 * 10000) / 10000;
-    }
-
-    points.push({
-      date: dateStr,
-      referenceRate: currentRef,
-      p25: p25Val,
-      rates,
-    });
+  const byPair = new Map<string, Map<string, RateSummary[]>>();
+  for (const s of summaries) {
+    const bySource = byPair.get(s.pair) ?? new Map<string, RateSummary[]>();
+    byPair.set(s.pair, bySource);
+    const list = bySource.get(s.source) ?? [];
+    list.push(s);
+    bySource.set(s.source, list);
   }
 
-  return {
-    pair,
-    displayPair,
-    sourceAsset,
-    destAsset,
-    baseSpreadBps: 25,
-    referenceRate: points[points.length - 1].referenceRate,
-    anchors,
-    points,
-    stabilityScore: "high",
-    estimatedEligible: true,
-  };
+  const histories: PairRateHistory[] = [];
+  for (const [pair, bySource] of [...byPair].sort(([a], [b]) => a.localeCompare(b))) {
+    const withData = [...bySource.values()].flat().filter((s) => s.sampleCount > 0);
+    if (withData.length === 0) continue;
+
+    const lastMs = Math.max(...withData.map((s) => toDayMs(s.date)));
+    const firstMs = Math.max(
+      Math.min(...withData.map((s) => toDayMs(s.date))),
+      lastMs - (chartDays - 1) * DAY_MS,
+    );
+    const dates: string[] = [];
+    for (let ms = firstMs; ms <= lastMs; ms += DAY_MS) dates.push(fromDayMs(ms));
+
+    const series: RateHistorySeries[] = [];
+    for (const [source, list] of [...bySource].sort(([a], [b]) => a.localeCompare(b))) {
+      const byDate = new Map<string, RateSummary>();
+      for (const s of list) if (s.sampleCount > 0) byDate.set(s.date, s);
+      const points = dates.map((d) => byDate.get(d) ?? null);
+      if (points.every((p) => p === null)) continue;
+      const kind = isReferenceSource(source) ? "reference" : "anchor";
+      series.push(
+        kind === "anchor"
+          ? { source, kind, points, minimumData: minimumDataStatus(list, now) }
+          : { source, kind, points },
+      );
+    }
+    histories.push({ pair, dates, series });
+  }
+  return histories;
 }
 
-/**
- * Built-in dataset for rate history across the manifest corridors.
- */
-export function getDailySummaryData(): DailySummaryResponse {
-  const pairs: CurrencyPairRateHistory[] = [
-    generatePairHistory(
-      "USDC/iso4217:USD",
-      "USDC/USD",
-      "USDC",
-      "iso4217:USD",
-      1.0,
-      ["testanchor.stellar.org", "mock-anchor.stellar.org"],
-      101,
-      {
-        "testanchor.stellar.org": [6, 7], // Gaps on days 6 and 7
-        "mock-anchor.stellar.org": [18], // Gap on day 18
-      },
-    ),
-    generatePairHistory(
-      "USDC/iso4217:NGN",
-      "USDC/NGN",
-      "USDC",
-      "iso4217:NGN",
-      1585.5,
-      ["cowrie.exchange", "testanchor.stellar.org"],
-      202,
-      {
-        "cowrie.exchange": [11, 12, 13], // Gap on days 11-13
-        "testanchor.stellar.org": [24], // Gap on day 24
-      },
-    ),
-    generatePairHistory(
-      "USDC/iso4217:MXN",
-      "USDC/MXN",
-      "USDC",
-      "iso4217:MXN",
-      18.35,
-      ["mx-example.stellar.org"],
-      303,
-      {
-        "mx-example.stellar.org": [9, 10], // Gap on days 9 and 10
-      },
-    ),
-    generatePairHistory(
-      "USDC/iso4217:CNY",
-      "USDC/CNY",
-      "USDC",
-      "iso4217:CNY",
-      7.24,
-      ["ng-cn.stellar.org"],
-      404,
-      {
-        "ng-cn.stellar.org": [15], // Gap on day 15
-      },
-    ),
-    generatePairHistory(
-      "USDC/iso4217:ZAR",
-      "USDC/ZAR",
-      "USDC",
-      "iso4217:ZAR",
-      18.12,
-      ["zeam.io"],
-      505,
-      {
-        "zeam.io": [5, 21], // Gaps on days 5 and 21
-      },
-    ),
-  ];
-
-  return { pairs };
-}
-
-/**
- * Calculates continuous path segments for an anchor so gaps (null values)
- * are not drawn through. Returns an array of coordinate segments, where each
- * segment is a continuous series of points.
- */
+/** A point on the chart. `value` is the plotted position only; labels show the source string. */
 export interface ChartCoordinate {
-  x: number;
-  y: number;
-  date: string;
-  rate: number;
+  readonly x: number;
+  readonly y: number;
+  readonly date: string;
+  readonly value: string;
 }
 
 export interface DiscontinuousPathSegment {
   readonly points: readonly ChartCoordinate[];
 }
 
-export function buildAnchorSegments(
-  points: readonly DailyRatePoint[],
-  anchor: string,
+/**
+ * Splits one series into runs of consecutive days with data, so a line is never drawn across a
+ * gap. `pick` chooses which statistic to plot (e.g. the median or the P25).
+ */
+export function buildSeriesSegments(
+  dates: readonly string[],
+  points: readonly (RateSummary | null)[],
+  pick: (summary: RateSummary) => string,
   mapX: (index: number) => number,
   mapY: (rate: number) => number,
 ): DiscontinuousPathSegment[] {
   const segments: DiscontinuousPathSegment[] = [];
-  let currentSegment: ChartCoordinate[] = [];
+  let current: ChartCoordinate[] = [];
 
-  points.forEach((pt, index) => {
-    const rate = pt.rates[anchor];
-    if (rate !== null && rate !== undefined && !Number.isNaN(rate)) {
-      currentSegment.push({
-        x: mapX(index),
-        y: mapY(rate),
-        date: pt.date,
-        rate,
-      });
-    } else {
-      // Gap encountered: finish current segment if non-empty
-      if (currentSegment.length > 0) {
-        segments.push({ points: currentSegment });
-        currentSegment = [];
-      }
+  points.forEach((summary, index) => {
+    const value = summary ? pick(summary) : undefined;
+    const rate = value === undefined ? Number.NaN : Number(value);
+    if (value !== undefined && Number.isFinite(rate)) {
+      current.push({ x: mapX(index), y: mapY(rate), date: dates[index], value });
+    } else if (current.length > 0) {
+      segments.push({ points: current });
+      current = [];
     }
   });
-
-  if (currentSegment.length > 0) {
-    segments.push({ points: currentSegment });
-  }
+  if (current.length > 0) segments.push({ points: current });
 
   return segments;
 }
 
-/**
- * Constructs an SVG path 'd' string from discontinuous segments.
- * Uses 'M' to start each segment, avoiding drawing lines through missing gaps.
- */
+/** An SVG path that starts a new `M` subpath for every segment, so gaps stay open. */
 export function segmentsToSvgPath(segments: readonly DiscontinuousPathSegment[]): string {
-  if (segments.length === 0) return "";
   const parts: string[] = [];
-
   for (const seg of segments) {
     if (seg.points.length === 0) continue;
-    const first = seg.points[0];
+    const [first, ...rest] = seg.points;
     let path = `M ${first.x.toFixed(2)} ${first.y.toFixed(2)}`;
-    for (let i = 1; i < seg.points.length; i++) {
-      const p = seg.points[i];
-      path += ` L ${p.x.toFixed(2)} ${p.y.toFixed(2)}`;
-    }
+    for (const p of rest) path += ` L ${p.x.toFixed(2)} ${p.y.toFixed(2)}`;
     parts.push(path);
   }
+  return parts.join(" ");
+}
 
+/**
+ * A closed band between each segment's P25 and median, one subpath per segment, so the shaded
+ * area also stops at gaps. Returns "" when there is nothing to shade.
+ */
+export function bandSegmentsToSvgPath(
+  dates: readonly string[],
+  points: readonly (RateSummary | null)[],
+  mapX: (index: number) => number,
+  mapY: (rate: number) => number,
+): string {
+  const lower = buildSeriesSegments(dates, points, (s) => s.p25, mapX, mapY);
+  const upper = buildSeriesSegments(dates, points, (s) => s.median, mapX, mapY);
+  const parts: string[] = [];
+  lower.forEach((low, i) => {
+    const high = upper[i];
+    if (!high || low.points.length === 0) return;
+    const top = high.points.map((p) => `${p.x.toFixed(2)} ${p.y.toFixed(2)}`);
+    const bottom = [...low.points].reverse().map((p) => `${p.x.toFixed(2)} ${p.y.toFixed(2)}`);
+    parts.push(`M ${top.join(" L ")} L ${bottom.join(" L ")} Z`);
+  });
   return parts.join(" ");
 }
