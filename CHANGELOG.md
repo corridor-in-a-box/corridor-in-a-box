@@ -29,6 +29,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   `packages/service/openapi.yaml` and checked by `tests/openapi.test.ts`.
 - Not yet: the lane check (RFC 0004 §4b), and `payoutMethod` does not filter, because no
   manifest declares one. `fees` is returned only when the anchor stated one.
+
 ### Added — accessibility checks for every step of the send app ([#692](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/692))
 
 - `web/e2e/accessibility.spec.ts` runs axe (WCAG A, AA and 2.2 tags plus best-practice) over each
