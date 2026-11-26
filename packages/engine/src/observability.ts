@@ -7,6 +7,7 @@ import type { Money } from "@corridor/types";
 import type { CorridorState } from "./state";
 import type { LivenessState } from "@corridor/manifest";
 import type { CheckResult } from "./gate";
+import type { AllowedPriceLabel } from "@corridor/router";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -97,12 +98,46 @@ export interface AuditEntry extends LogFields {
   readonly networkFee?: string;
   readonly amountRefunded?: string;
   readonly amountFee?: string;
+  /** Whether the quote was pre-fetched / supplied to execute() rather than fetched. */
+  readonly quoteSupplied?: boolean;
   /**
    * Pre-settle gate results, one per configured check: recorded on the
    * transition into `verifying` and again on the one leaving it (`settling`,
    * `failed`, or `recovering` on the way to `held`).
    */
   readonly checks?: readonly CheckResult[];
+  /**
+   * The routing choice: which option the resolver chose, its RFC 0004 price
+   * label and rank, and the reasons of the top three options. Recorded once,
+   * on the run's first transition out of `created`.
+   */
+  readonly route?: RouteChoice;
+}
+
+/** An option as recorded in the audit trail. */
+export interface RouteChoiceOption {
+  readonly id: string;
+  /** RFC 0004 price label (`locked`, `indicative`, `estimated`); absent when the option had none. */
+  readonly label?: AllowedPriceLabel;
+  readonly rank: number;
+  readonly reasons: readonly string[];
+}
+
+/** Why a payment went through the anchor it did, as recorded in the audit trail. */
+export interface RouteChoice {
+  readonly chosen: {
+    readonly id: string;
+    /**
+     * RFC 0004 price label of the chosen option: the label the resolver gave
+     * it, otherwise the label of the run's own quote (`locked` for a firm
+     * quote, `indicative` otherwise). Absent only when neither is known, e.g.
+     * a run that failed before it was quoted.
+     */
+    readonly label?: AllowedPriceLabel;
+    readonly rank: number;
+  };
+  /** Up to three options, best rank first. */
+  readonly top: readonly RouteChoiceOption[];
 }
 
 /** Verification decision recorded before the engine claims an idempotency key. */

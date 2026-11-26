@@ -52,6 +52,9 @@ import {
 } from "@corridor/engine";
 import type { Sep10Signer } from "@corridor/adapter-kit";
 
+// `protocol: wallet` delivery: a plain payment to the recipient's own account.
+export { WalletAdapter, type WalletAdapterOptions } from "./wallet";
+
 function passphraseFor(network: "public" | "testnet"): string {
   return network === "public" ? Networks.PUBLIC : Networks.TESTNET;
 }
