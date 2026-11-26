@@ -9,11 +9,11 @@ The design is [RFC 0004: Smart router](rfcs/0004-smart-router.md), sections 1,
 2 and 5. The code-level seam the planner hands its choice to is
 [docs/route-resolver.md](route-resolver.md).
 
-> **What is built today.** `@corridor/router` ships the planner's types and most
-> of its steps as separate building blocks. It does not yet ship a complete
-> `RoutePlanner`: the ranking function ([#611]) and automatic fallback to the
-> next route ([#626]) are planned. Each section below says which parts exist
-> and which are planned.
+> **What is built today.** `@corridor/router` ships the planner's types and its
+> steps as separate building blocks, including the ranking function `rank()`
+> ([#611]), and the engine falls back to the next route before funds move
+> ([#626]). It does not ship a complete `RoutePlanner` that wires the steps
+> together. Each section below says which parts exist and which are planned.
 
 ## What the planner does and does not do
 
@@ -50,7 +50,7 @@ a business can see why a route was not offered.
 | 4   | **Limits**     | Drop anchors whose minimum or maximum excludes the amount, or that need details the request cannot supply.                                                                                      | `filterByLimitsAndFields()` ([#606])                                                                                                                                    |
 | 5   | **Health**     | Drop anchors whose circuit breaker is open.                                                                                                                                                     | `filterByCircuitBreaker()` ([#607])                                                                                                                                     |
 | 6   | **Price**      | Ask each remaining anchor for a price and label it (see [the three labels](#the-three-labels)). An anchor with no price and not enough rate history is returned as unpriceable and ranked last. | `requestLockedOption()` ([#608]), `fetchIndicativePrice()` ([#609]), `buildEstimatedOption()` ([#610]), `priceCandidatesInParallel()`, `filterOptionsByAllowedLabels()` |
-| 7   | **Rank**       | Order what is left by [the ranking rule](#the-ranking-rule) and return every option, including the dropped ones with their reason.                                                              | Planned: ranking ([#611]). On main: `reliability()` ([#612]) and reasons on every option ([#613]).                                                                      |
+| 7   | **Rank**       | Order what is left by [the ranking rule](#the-ranking-rule) and return every option, including the dropped ones with their reason.                                                              | `rank()` ([#611]), `reliability()` ([#612]) and reasons on every option ([#613]).                                                                                       |
 
 ## The three labels
 
@@ -102,8 +102,17 @@ P25 rate. The reliability score is `reliability()` ([#612], see
 [Reliability](route-resolver.md#reliability)): with fewer than
 20 runs in the window it is pulled toward 0.5, so one early result cannot
 decide it, and it falls to 0 as the attestation reaches the one-week freshness
-bound. The function that sorts options by amount, reliability and speed is
-planned ([#611]).
+bound.
+
+`rank(options, { estimateMarginBps })` ([#611]) applies the rule. It takes any
+option with `receivingDomain`, `price.label`, `recipientGets`, `reliability`
+and an optional `estimatedDeliveryMs` (a full `RouteOption` works), and
+returns a new array ordered by the cautious amount, then reliability, then
+delivery time (an unknown time loses the tie), then receiving domain. Options
+equal on every key keep their input order. `cautiousRecipientAmount` exposes
+the cautious-amount step on its own. Options in different assets, a malformed
+amount, an unknown label or a reliability outside 0..1 throw a `RangeError`
+rather than rank silently wrong.
 
 ## The fallback rule
 
@@ -116,9 +125,17 @@ What happens when the chosen route fails depends on whether money has moved:
 - **After settlement starts**: never switch. Recovery follows the existing
   refund path.
 
-Status: automatic fallback is planned ([#626]). Today a failure before funds
-move ends the run as failed, and the caller decides whether to start a new
-payment on another option.
+This is on main ([#626]). A resolver offers the next options as
+`RouteDecision.alternates`, an ordered list of `RouteCandidate`s (receiving
+anchor, optional sending anchor, trust). When the primary route fails before
+funds move, the engine tries them as linked runs under `<key>:alt1`,
+`<key>:alt2`, and so on, up to `maxAlternates` in `EngineDeps` (default 2; `0`
+turns fallback off). The audit trail links the runs with `fallbackTo` and
+`fallbackFrom`. A resolver that returns no `alternates`, such as the shipped
+`StaticRouteResolver` and `RegistryRouteResolver`, gets no fallback. Once a
+run reaches `settling` no other route is tried, and a resumed run whose route
+now resolves to a different receiving domain than the one stored on it is
+refused with `ROUTE_PINNED`.
 
 ## Route types
 
@@ -248,7 +265,8 @@ The planner chooses; the engine pays. What exists today to connect the two:
   `apiVersion` and a factory, point `CORRIDOR_RESOLVER_MODULE` at it, and run
   `describeResolverContract` over it. Return a `ranking` from `resolve()` to
   [record the choice](route-resolver.md#recording-the-choice) and its reasons
-  in the audit trail.
+  in the audit trail, and the next-best options as `alternates` so the engine
+  can [fall back](#the-fallback-rule) to them before funds move.
 
 [#604]: https://github.com/corridor-in-a-box/corridor-in-a-box/issues/604
 [#605]: https://github.com/corridor-in-a-box/corridor-in-a-box/issues/605

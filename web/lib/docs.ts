@@ -155,8 +155,10 @@ label and the reasons it ranked where it did. It only decides: the sending
 business's own signer executes the payment. The design is RFC 0004, sections 1, 2 and 5.
 
 \`@corridor/router\` ships the planner's types and most of its steps as building
-blocks, including the reliability score (\`reliability()\`, #612). Ranking
-(#611) and automatic fallback (#626) are planned.
+blocks, including ranking (\`rank()\`, #611) and the reliability score
+(\`reliability()\`, #612). The engine falls back to the next route before funds
+move (#626). A complete \`RoutePlanner\` that wires the steps together is not
+shipped yet.
 
 ## The steps
 
@@ -179,7 +181,7 @@ blocks, including the reliability score (\`reliability()\`, #612). Ranking
 ## Ranking and fallback
 
 - **Ranking:** by what the recipient gets, priced cautiously (locked as quoted; indicative and estimated minus the margin), then by reliability (this business's own success rate on the anchor over 30 days, scaled down for an old attestation), then by speed. Deterministic, with reasons on every option.
-- **Fallback:** before funds move (quote refused, KYC rejected, or opening the transaction failed), the run fails and a new run starts on the next option with the key \`<key>:alt1\`. After settlement starts, never switch; recovery follows the refund path.
+- **Fallback:** before funds move (quote refused, KYC rejected, or opening the transaction failed), the run fails and the engine tries the resolver's \`alternates\` as linked runs under \`<key>:alt1\`, \`<key>:alt2\`, up to \`maxAlternates\` (default 2). After settlement starts, never switch; recovery follows the refund path, and a resume that would change the anchor is refused with \`ROUTE_PINNED\`.
 
 ## Route types in plain words
 
