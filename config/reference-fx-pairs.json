@@ -1,0 +1,22 @@
+[
+  {
+    "base": "USD",
+    "quote": "NGN"
+  },
+  {
+    "base": "USD",
+    "quote": "ZAR"
+  },
+  {
+    "base": "USD",
+    "quote": "MXN"
+  },
+  {
+    "base": "USD",
+    "quote": "PHP"
+  },
+  {
+    "base": "USD",
+    "quote": "KES"
+  }
+]

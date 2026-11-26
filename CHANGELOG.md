@@ -7,6 +7,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
+### Added — a reference FX source for rate history ([#592](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/592))
+
+- `docs/reference-fx-sources.md` compares four reference FX sources on coverage (NGN, ZAR, MXN,
+  PHP, KES), update frequency, cost and republishing terms, and records the choice: Currency-api
+  (CC0), checked against the ECB euro reference rates where the ECB has the currency.
+- `packages/engine/src/rate-collector-reference-fx.ts` is the collector step. It writes one
+  `reference_fx` sample per pair per day (`iso4217:USD` to `iso4217:NGN` and so on), with the
+  rate stored as the digits written in the source file. Each sample's `detail.ecb` says whether
+  the ECB cross rate agrees within 200 basis points, differs, or could not be checked. NGN and KES
+  are always unchecked: the ECB does not list them.
+- `pnpm rate:collector` runs the step for the pairs in `config/reference-fx-pairs.json`
+  (`RATE_COLLECTOR_REFERENCE_FX_PAIRS` names another file), at most once an hour.
+- `docs/rate-history.md` names the source, the cross-check and the licence.
+
 ### Added — the send flow driven against the reference anchor in CI ([#693](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/693))
 
 - `web/e2e/send-flow.spec.ts` runs the browser against the live lane: the Anchor Platform

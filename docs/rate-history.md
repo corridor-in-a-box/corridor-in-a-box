@@ -30,11 +30,31 @@ Per RFC 0004 §3, each source is recorded as its own series (never mixed):
     anchor.
   - Fetched from: Horizon `/trade_aggregations` at 15-minute resolution.
   - Licence: public ledger data.
-- **Reference FX** — a public reference FX rate.
-  - Measures: the market FX rate for a fiat pair, to compare anchor prices
-    against.
-  - Fetched from: to confirm — the provider is still to be chosen, and its
-    licence must allow republishing.
+- **Reference FX** — a public reference FX rate (`reference_fx` samples,
+  `packages/engine/src/rate-collector-reference-fx.ts`).
+  - Measures: the day's market FX rate for each pair in
+    `config/reference-fx-pairs.json` (USD against NGN, ZAR, MXN, PHP and
+    KES), to compare anchor prices against. One sample per pair per day,
+    stored as quote units per one base unit, with the assets written
+    `iso4217:USD` and `iso4217:NGN`. A reference sample belongs to no
+    anchor. It is used to judge prices after the fact and never prices or
+    routes a payment.
+  - Fetched from: [Currency-api](https://github.com/fawazahmed0/exchange-api),
+    its jsDelivr host first and its Cloudflare Pages mirror second. The
+    rate is stored as the digits written in the file.
+  - Cross-check: Currency-api names no upstream source, so each sample is
+    compared with the ECB euro reference rates where the ECB lists both
+    currencies (ZAR, MXN, PHP). The sample's `detail.ecb` records
+    `agrees` or `differs` (more than 200 basis points apart), with the
+    ECB cross rate and its date. A sample that differs is kept and
+    marked, not dropped. The ECB lists neither NGN nor KES, so those
+    samples are `unchecked`: **for NGN and KES the reference rate rests
+    on one source.**
+  - Licence: Currency-api is CC0 1.0, which allows republishing. The ECB
+    rates may be reused with the ECB named as the source; only a
+    comparison against them is stored. The choice and the sources that
+    were ruled out are in
+    [reference-fx-sources.md](reference-fx-sources.md).
 - **Own payment** — the business's own completed payments.
   - Measures: the effective rate (`amount_out / amount_in`) of the
     business's own completed payments — the only data for anchors that
@@ -52,9 +72,11 @@ Actions, whose schedules are too unreliable for a 15-minute cadence.
 
 Run it with `DATABASE_URL=postgres://... pnpm rate:collector`
 (`examples/run-rate-collector.ts`, a `RateCollectorLoop` from
-`packages/engine/src/rate-collector-loop.ts`). Each run polls SEP-38 prices
-and then reads the DEX pairs; a run that is still going when the next one is
-due makes that next one skip. The settings are in `.env.example`.
+`packages/engine/src/rate-collector-loop.ts`). Each run polls SEP-38 prices,
+reads the DEX pairs and then reads the reference FX rates; a run that is
+still going when the next one is due makes that next one skip. The reference
+FX source changes once a day, so that step reads it at most once an hour and
+a repeat of the same day stores nothing. The settings are in `.env.example`.
 
 ## Daily summary
 

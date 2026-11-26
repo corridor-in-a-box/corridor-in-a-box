@@ -15,6 +15,11 @@
 //                 last 24 hours of complete 15-minute buckets. Writes `dex_trade` samples.
 //                 Re-reading buckets already stored is a no-op, so a restart or a missed
 //                 run backfills without duplicating anything.
+//   reference_fx  `collectReferenceFx` (#592). Reads Currency-api's daily file for every pair
+//                 in config/reference-fx-pairs.json and writes one `reference_fx` sample per
+//                 pair per day, tagged with STELLAR_NETWORK. Where the ECB lists both
+//                 currencies, the sample records whether the two sources agree. The source
+//                 changes once a day, so the step reads it at most once an hour.
 //   rate_pruning  `createPruningCollectorStep` (#599). Once per UTC day, deletes raw samples
 //                 older than RATE_RETENTION_DAYS whole days (default 90, at least 7), in
 //                 batches, and only for days whose daily summary has been written. Daily
@@ -34,6 +39,7 @@
 //   STELLAR_NETWORK=testnet                      # testnet | public; registry + SEP-38 network
 //   RATE_COLLECTOR_SEP38_ANCHORS=a.com,b.org     # extra anchors to poll (optional)
 //   RATE_COLLECTOR_DEX_PAIRS=config/dex-pairs.json
+//   RATE_COLLECTOR_REFERENCE_FX_PAIRS=config/reference-fx-pairs.json
 //   RATE_COLLECTOR_INTERVAL_MS=900000            # 15 minutes (default)
 //   RATE_COLLECTOR_INTERVAL_SECONDS=900          # alternative to the above
 //   RATE_COLLECTOR_JITTER_MS=5000                # 0 to 5 seconds jitter (default)
@@ -50,9 +56,11 @@ import {
   RATE_NETWORKS,
   DEX_TRADE_RESOLUTION_15M,
   collectDexTrades,
+  collectReferenceFx,
   consoleLogger,
   createPruningCollectorStep,
   loadDexPairsConfig,
+  loadReferenceFxPairsConfig,
   migrate,
   parseCollectorInterval,
   parseCollectorJitter,
@@ -61,6 +69,7 @@ import {
   type CollectorStep,
   type DexPairConfig,
   type RateNetwork,
+  type ReferenceFxPairConfig,
   type RateSampleInput,
   type RateSampleRecorder,
   type Sep38AttestationSource,
@@ -68,6 +77,9 @@ import {
 
 /** How far back each DEX run re-reads, so a missed run or a restart is backfilled. */
 const DEX_LOOKBACK_MS = 24 * 60 * 60 * 1000;
+
+/** The reference FX source publishes once a day; asking it every 15 minutes would be rude. */
+const REFERENCE_FX_MIN_INTERVAL_MS = 60 * 60 * 1000;
 
 interface Deployments {
   [network: string]: {
@@ -166,6 +178,50 @@ function dexStep(pairs: readonly DexPairConfig[], store: RateSampleRecorder): Co
   };
 }
 
+function referenceFxStep(
+  pairs: readonly ReferenceFxPairConfig[],
+  network: RateNetwork,
+  store: RateSampleRecorder,
+): CollectorStep {
+  // Set only after a run that read the source, so a failed run is tried again next tick.
+  let lastReadAt = 0;
+  return {
+    name: "reference_fx",
+    run: async () => {
+      if (Date.now() - lastReadAt < REFERENCE_FX_MIN_INTERVAL_MS) {
+        return {
+          collected: 0,
+          skipped: true,
+          message: "reference FX read less than an hour ago",
+        };
+      }
+      const result = await collectReferenceFx(pairs, network, store);
+      lastReadAt = Date.now();
+      const differing = result.samples.filter(
+        (s) => (s.detail?.ecb as { status?: string } | undefined)?.status === "differs",
+      );
+      consoleLogger.log("info", "corridor.rate_collector.reference_fx.run_completed", {
+        pairs: result.samples.map((s) => ({
+          sell: s.sellAsset,
+          buy: s.buyAsset,
+          date: s.detail?.date,
+          ecb: (s.detail?.ecb as { status?: string } | undefined)?.status,
+        })),
+        missing: result.missing.map((p) => `${p.base}/${p.quote}`),
+        ...(result.ecbError ? { ecbError: result.ecbError } : {}),
+      });
+      return {
+        collected: result.inserted,
+        read: result.samples.length,
+        missing: result.missing.length,
+        differing: differing.length,
+        ...(result.ecbError ? { ecbError: result.ecbError } : {}),
+        message: `stored ${result.inserted} new reference FX rates (${result.samples.length} read, ${result.missing.length} missing, ${differing.length} differ from the ECB)`,
+      };
+    },
+  };
+}
+
 async function main(): Promise<void> {
   const databaseUrl = process.env.DATABASE_URL?.trim();
   if (!databaseUrl) {
@@ -189,6 +245,10 @@ async function main(): Promise<void> {
     process.env.RATE_COLLECTOR_DEX_PAIRS || "config/dex-pairs.json",
   );
   const dexPairs = loadDexPairsConfig(dexPairsPath);
+  const referenceFxPairsPath = repoPath(
+    process.env.RATE_COLLECTOR_REFERENCE_FX_PAIRS || "config/reference-fx-pairs.json",
+  );
+  const referenceFxPairs = loadReferenceFxPairsConfig(referenceFxPairsPath);
   const registry = registryFor(network);
   // Checked before connecting, so a bad value stops the process with a clear error.
   const retentionDays = parseRetentionDays(process.env.RATE_RETENTION_DAYS);
@@ -215,9 +275,16 @@ async function main(): Promise<void> {
   } else {
     console.log(`• dex_trades: skipped (no pairs in ${dexPairsPath})`);
   }
+  if (referenceFxPairs.length > 0) {
+    steps.push(referenceFxStep(referenceFxPairs, network, store));
+  } else {
+    console.log(`• reference_fx: skipped (no pairs in ${referenceFxPairsPath})`);
+  }
   if (steps.length === 0) {
     await pool.end();
-    console.error("✗ nothing to collect: configure a SEP-38 source or DEX pairs");
+    console.error(
+      "✗ nothing to collect: configure a SEP-38 source, DEX pairs or reference FX pairs",
+    );
     process.exit(2);
   }
   // Pruning collects nothing, so it is added after the check above. It does work only on the
@@ -240,6 +307,7 @@ async function main(): Promise<void> {
     `  network:     ${network} (SEP-38 registry: ${registry ? "on-chain" : "none"})`,
   );
   console.log(`  dex pairs:   ${dexPairs.length} from ${dexPairsPath}`);
+  console.log(`  fx pairs:    ${referenceFxPairs.length} from ${referenceFxPairsPath}`);
   console.log(`  retention:   ${retentionDays} days of raw samples (pruned daily)`);
   console.log(`  steps:       ${steps.map((s) => s.name).join(", ")}\n`);
 
