@@ -19,15 +19,6 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 - `docs/README.md` indexes the guides and RFCs. The web docs site has a route planner
   page, and `docs/route-resolver.md` and `README.md` link to the guide.
 
-- `docs/route-planner.md` documents how a route is chosen for businesses and
-  contributors: the six evaluation steps, the three operational labels (`proven`,
-  `verified`, `unverified`), the deterministic ranking rule, the fail-closed
-  fallback rule, route types (SEP-31, SEP-6 with the third-party caveat, and
-  wallets as non-targets), and how to plug in a custom planner.
-- `docs/rfcs/0004-smart-router.md` records the architectural specification for the
-  Smart Router and Route Planner.
-- `docs/README.md` provides an index of technical guides and RFCs.
-- `docs/route-resolver.md` and `README.md` link to the new guide.
 ### Added — estimate gap when a business guarantees estimated prices ([#627](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/627))
 
 - With `guaranteeEstimates` on (`EngineDeps` or `ExecuteOptions`, RFC 0004 D4), the engine

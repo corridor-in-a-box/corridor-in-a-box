@@ -72,8 +72,9 @@ They tell the sender how firm the amount is.
   the other options with a reason.
 - A business can choose to guarantee estimated prices
   (`policy.guaranteeEstimates`, off by default). It then pays the shown amount
-  and covers any difference from its own funds. Recording that difference per
-  payment (`estimate_gap`) is planned ([#627]).
+  and covers any difference from its own funds. The engine records that
+  difference on each run as `estimateGap` (the anchor's actual payout minus the
+  guaranteed amount), returned on `GET /payments/:key` ([#627]).
 
 ## The ranking rule
 
@@ -97,7 +98,8 @@ On main, the pricing steps already produce the cautious amounts:
 `requestLockedOption()` and `fetchIndicativePrice()` return a
 `cautiousDestAmount` (the indicative one minus `DEFAULT_ESTIMATE_MARGIN_BPS`,
 50 basis points), and `buildEstimatedOption()` applies the same margin to the
-P25 rate. The reliability score is `reliability()` ([#612]): with fewer than
+P25 rate. The reliability score is `reliability()` ([#612], see
+[Reliability](route-resolver.md#reliability)): with fewer than
 20 runs in the window it is pulled toward 0.5, so one early result cannot
 decide it, and it falls to 0 as the attestation reaches the one-week freshness
 bound. The function that sorts options by amount, reliability and speed is
