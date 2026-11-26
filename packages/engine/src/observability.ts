@@ -98,6 +98,8 @@ export interface AuditEntry extends LogFields {
   readonly networkFee?: string;
   readonly amountRefunded?: string;
   readonly amountFee?: string;
+  /** Whether the quote was pre-fetched / supplied to execute() rather than fetched. */
+  readonly quoteSupplied?: boolean;
   /**
    * Pre-settle gate results, one per configured check: recorded on the
    * transition into `verifying` and again on the one leaving it (`settling`,

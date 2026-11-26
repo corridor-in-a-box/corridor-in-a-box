@@ -83,3 +83,50 @@ describe("anchor probe findings (#650, #651, #653, #654)", () => {
     expect(sep31?.detail).toBe("fetch failed");
   });
 });
+
+describe("anchor probe findings (#660, #661) and the Africa fleet (#664)", () => {
+  it("records a dated Flutterwave finding: no stellar.toml, so it cannot receive", () => {
+    const p = paragraphAbout("flutterwave.com");
+    expect(p).toContain("2026-11-25");
+    expect(p).toContain("HTTP 404");
+    expect(p).toContain("No corridor manifest is written");
+  });
+
+  it("records a dated Bitso finding with the HTTP status the probe actually saw", () => {
+    const p = paragraphAbout("bitso.com");
+    expect(p).toContain("2026-11-25");
+    expect(p).toContain("HTTP 404");
+    // The domain resolves; an earlier draft wrongly recorded a DNS failure.
+    expect(p).not.toContain("ENOTFOUND");
+  });
+
+  const african = [
+    ["finclusive.com", "https://anchors.stellar.org/?search=Finclusive"],
+    ["chippercash.com", "https://anchors.stellar.org/?search=ChipperCash"],
+    ["linkio.africa", "https://anchors.stellar.org/?search=Link"],
+    ["impalapay.com", "https://anchors.stellar.org/?search=ImpalaPay"],
+    ["yellowcard.io", "https://anchors.stellar.org/?search=Yellow+Card"],
+  ] as const;
+
+  it("adds five directory-sourced African anchors, each with a dated finding", () => {
+    for (const [domain, source] of african) {
+      expect(anchors.domains).toContain(domain);
+      const entry = (anchors.anchors as Array<Record<string, unknown>>).find(
+        (a) => a.domain === domain,
+      );
+      expect(entry).toMatchObject({ source, kind: "other", added: "2026-11-25" });
+      const para = comments.split("\n\n").find((x) => x.startsWith(`${domain} is `));
+      expect(para, `no finding paragraph for ${domain}`).toContain(
+        source.replace("https://", ""),
+      );
+      expect(para).toMatch(/toml_fetch|HTTP 404/);
+    }
+    expect(comments).toContain("Probed 2026-11-25 with `pnpm probe:anchor <domain>`");
+  });
+
+  it("does not add domains that are neither in the directory nor named as anchors", () => {
+    for (const d of ["fonbnk.com", "honeycoin.app", "kotanipay.com", "paychant.com"]) {
+      expect(anchors.domains).not.toContain(d);
+    }
+  });
+});

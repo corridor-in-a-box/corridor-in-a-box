@@ -3302,6 +3302,126 @@ describe("adapter-reported (off-chain) settlement (#186)", () => {
   });
 });
 
+describe("guaranteeEstimates and estimate_gap (RFC 0004 D4)", () => {
+  it("records positive estimate_gap for a gain (anchor delivered more than guaranteed)", async () => {
+    const store = new InMemoryIdempotencyStore();
+    const d = {
+      ...deps({ amountOut: { asset: "iso4217:MOCK", amount: "105.00" } }),
+      idempotency: store,
+    };
+    const r = await execute(intent("gain-1"), corridor(), d, {
+      guaranteeEstimates: true,
+      guaranteedAmount: "100.00",
+    });
+
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.state).toBe("completed");
+      expect(r.value.estimateGap).toBe("5");
+    }
+
+    const stored = await store.get("gain-1");
+    expect(stored?.estimateGap).toBe("5");
+  });
+
+  it("records negative estimate_gap for a loss (anchor delivered less than guaranteed)", async () => {
+    const store = new InMemoryIdempotencyStore();
+    const d = {
+      ...deps({ amountOut: { asset: "iso4217:MOCK", amount: "95.00" } }),
+      idempotency: store,
+    };
+    const r = await execute(intent("loss-1"), corridor(), d, {
+      guaranteeEstimates: true,
+      guaranteedAmount: "100.00",
+    });
+
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.state).toBe("completed");
+      expect(r.value.estimateGap).toBe("-5");
+    }
+
+    const stored = await store.get("loss-1");
+    expect(stored?.estimateGap).toBe("-5");
+  });
+
+  it("records zero estimate_gap when anchor delivers exactly guaranteed amount", async () => {
+    const store = new InMemoryIdempotencyStore();
+    const d = {
+      ...deps({ amountOut: { asset: "iso4217:MOCK", amount: "100.00" } }),
+      idempotency: store,
+    };
+    const r = await execute(intent("zero-1"), corridor(), d, {
+      guaranteeEstimates: true,
+      guaranteedAmount: "100.00",
+    });
+
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.state).toBe("completed");
+      expect(r.value.estimateGap).toBe("0");
+    }
+
+    const stored = await store.get("zero-1");
+    expect(stored?.estimateGap).toBe("0");
+  });
+
+  it("defaults guaranteedAmount to quote destAmount when not explicitly specified", async () => {
+    const store = new InMemoryIdempotencyStore();
+    // Default mock quote sets destAmount.amount equal to intent.sourceAmount.amount ("100.00")
+    const d = {
+      ...deps({ amountOut: { asset: "iso4217:MOCK", amount: "102.50" } }),
+      idempotency: store,
+    };
+    const r = await execute(intent("default-guarantee"), corridor(), d, {
+      guaranteeEstimates: true,
+    });
+
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.state).toBe("completed");
+      expect(r.value.estimateGap).toBe("2.5");
+    }
+
+    const stored = await store.get("default-guarantee");
+    expect(stored?.estimateGap).toBe("2.5");
+  });
+
+  it("enables guaranteeEstimates when configured on EngineDeps", async () => {
+    const store = new InMemoryIdempotencyStore();
+    const d = {
+      ...deps({ amountOut: { asset: "iso4217:MOCK", amount: "98.00" } }),
+      idempotency: store,
+      guaranteeEstimates: true,
+    };
+    const r = await execute(intent("deps-guarantee"), corridor(), d);
+
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.state).toBe("completed");
+      expect(r.value.estimateGap).toBe("-2");
+    }
+  });
+
+  it("does not record estimate_gap when guaranteeEstimates is off", async () => {
+    const store = new InMemoryIdempotencyStore();
+    const d = {
+      ...deps({ amountOut: { asset: "iso4217:MOCK", amount: "105.00" } }),
+      idempotency: store,
+    };
+    const r = await execute(intent("no-guarantee"), corridor(), d);
+
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.state).toBe("completed");
+      expect(r.value.estimateGap).toBeUndefined();
+    }
+
+    const stored = await store.get("no-guarantee");
+    expect(stored?.estimateGap).toBeUndefined();
+  });
+});
+
 // #628: why did this payment go through anchor X? The answer is in the trail.
 describe("routing choice in the audit trail", () => {
   /** A Queryable that keeps corridor_audit rows in memory, so a test can read back what was written. */

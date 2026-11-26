@@ -216,6 +216,7 @@ learn from, so collection starts before the planner ships (D6).
   count) as JSON, so anyone can check the numbers the router uses.
 - **Minimum data:** an anchor gets `estimated` only with at least 7 days of
   data and at least 100 samples in the window. Below that it is unpriceable.
+- The rate-history page documents this section: [docs/rate-history.md](../rate-history.md).
 
 ## 4. Reusable onboarding
 

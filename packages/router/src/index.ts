@@ -128,6 +128,10 @@ export {
   type RegistryResolverOptions,
 } from "./registry-resolver";
 
+// Planner step 1: corridors whose declared destination matches the request.
+export { candidates } from "./candidates";
+export type { CandidateRequest, CandidatesResult, NonMatchingCorridor } from "./candidates";
+
 // Planner step: keep only candidates the registry can vouch for, with reasons
 // for the rest. Same rules as RegistryRouteResolver, via checkAttestation.
 export {
@@ -237,6 +241,13 @@ export type {
   RateSample,
 } from "./estimated-price";
 export {
+  canonicalDecimal,
+  compareDecimals,
+  percentile,
+  percentileRank,
+  windowed,
+} from "./rate-percentile";
+export {
   DEFAULT_ESTIMATE_MARGIN_BPS,
   applyEstimateMargin,
   fetchIndicativePrice,
@@ -248,3 +259,18 @@ export type {
   PinnedRunRecord,
   PinnedRunStore,
 } from "./pinned-resolver";
+
+// RFC 0004 route-option score: run-history success rate, discounted by attestation age.
+export {
+  ATTESTATION_PENALTY_LEDGERS,
+  MIN_RELIABILITY_RUNS,
+  RELIABILITY_WINDOW_MS,
+  reliability,
+} from "./reliability";
+export type {
+  ReliabilityAttestationSource,
+  ReliabilityDeps,
+  ReliabilityRun,
+  ReliabilityRunOutcome,
+  ReliabilityRunStore,
+} from "./reliability";

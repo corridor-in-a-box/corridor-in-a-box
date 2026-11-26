@@ -99,7 +99,8 @@ contracts/       Soroban registry + attester contracts
 scripts/         reference-anchor.sh, assert-testnet-corridor.ts, the
                  corridor catalog, adapter scaffold and release checks
 docs/            threat model, key management, bespoke adapters,
-                 "why not Anchor Platform", SEP coverage, operations, …
+                 "why not Anchor Platform", SEP coverage, operations,
+                 rate history (docs/rate-history.md), …
 examples/        runnable end-to-end demos, the service launcher and a
                  scriptable mock anchor (`pnpm mock:anchor`)
 ```

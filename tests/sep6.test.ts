@@ -718,6 +718,30 @@ describe("getTransaction", () => {
     expect(r.ok && r.value.amountIn).toEqual({ asset: "USDC", amount: "5.00" });
   });
 
+  it("reports amountOut in amount_out_asset, not the amount-in asset (#627)", async () => {
+    const r = await getTx({
+      transaction: {
+        status: "completed",
+        amount_in: "5.00",
+        amount_in_asset: "stellar:USDC:GISSUER",
+        amount_out: "1249.50",
+        amount_out_asset: "iso4217:ARS",
+      },
+    });
+    expect(r.ok && r.value.amountIn).toEqual({
+      asset: "stellar:USDC:GISSUER",
+      amount: "5.00",
+    });
+    expect(r.ok && r.value.amountOut).toEqual({ asset: "iso4217:ARS", amount: "1249.50" });
+  });
+
+  it("names the corridor's dest asset when amount_out comes without amount_out_asset", async () => {
+    const r = await getTx({
+      transaction: { status: "completed", amount_in: "5.00", amount_out: "1249.50" },
+    });
+    expect(r.ok && r.value.amountOut).toEqual({ asset: "iso4217:ARS", amount: "1249.50" });
+  });
+
   it("fails closed on an unreadable body and on an HTTP error", async () => {
     const noStatus = await getTx({}, res({ transaction: { status: 42 } }));
     expect(!noStatus.ok && noStatus.error.code).toBe("ANCHOR_UNAVAILABLE");

@@ -11,6 +11,7 @@ import {
   fail,
   isSettleableAmount,
   ok,
+  subAmounts,
   type CorridorError,
   type Money,
   type Outcome,
@@ -165,6 +166,12 @@ export interface EngineDeps {
    * evaluation while recording `gate.skipped` in the audit log and emitting a warning.
    */
   unsafeSkipPreSettleGate?: boolean;
+  /**
+   * When true, the business guarantees estimated prices to the customer and absorbs
+   * rate differences between the guaranteed amount and anchor payout (RFC 0004 D4).
+   * Default setting for runs executed with these deps.
+   */
+  guaranteeEstimates?: boolean;
 }
 
 export interface RunResult {
@@ -176,6 +183,11 @@ export interface RunResult {
   readonly settlementRef?: SettlementRef;
   /** Ordered list of states the run passed through — useful for the example/CLI. */
   readonly trail: readonly CorridorState[];
+  /**
+   * Difference between guaranteed/shown payout and actual anchor payout (RFC 0004 D4).
+   * Recorded when guaranteeEstimates is on. Positive = gain, negative = loss, zero = exact match.
+   */
+  readonly estimateGap?: string;
 }
 
 export interface ExecuteOptions {
@@ -195,7 +207,9 @@ export interface ExecuteOptions {
    * Pre-obtained caller quote (e.g. a locked option presented to the sender).
    * When present, the engine honours it instead of fetching a fresh quote, and
    * refuses an expired firm quote (`QUOTE_EXPIRED`) rather than re-quoting at
-   * a different rate.
+   * a different rate. A quote for a different source asset or amount than the
+   * intent is refused too (`QUOTE_UNAVAILABLE`, not retryable). The transition
+   * into `quoted` records `quoteSupplied: true` in the audit trail (#622).
    */
   quote?: Quote;
   /**
@@ -225,6 +239,18 @@ export interface ExecuteOptions {
    * job — this only keeps the ids correlatable until it is.
    */
   traceparent?: string;
+  /**
+   * When true, guarantee estimated prices and record estimateGap on the run (RFC 0004 D4).
+   */
+  guaranteeEstimates?: boolean;
+  /**
+   * Explicit guaranteed payout amount shown to customer. Defaults to the quote's destAmount.
+   */
+  guaranteedAmount?: string | Money;
+  /**
+   * Explicit actual payout amount delivered by anchor, overriding TransactionStatus.amountOut.
+   */
+  actualAmount?: string | Money;
 }
 
 /** The `cause` of a `DRY_RUN_COMPLETE` error: what the gate said before the run stopped. */
@@ -578,17 +604,34 @@ export async function execute(
   }
 
   // --- 1. quote ---------------------------------------------------------
+  const quoteSupplied = opts.quote !== undefined;
   const q = await timed("quote", () =>
     quote(adapter, intent, corridor, now(), provider, opts.quote),
   );
   if (!q.ok) return die(q.error);
+  if (quoteSupplied) {
+    (deps.logger ?? silentLogger).log("info", "corridor.quote.supplied", {
+      idempotencyKey: run.idempotencyKey,
+      corridorId: corridor.id,
+      quoteId: q.value.id,
+    });
+  }
   run.quoteId = q.value.id;
   run.quoteExpiresAt = q.value.expiresAt;
   run.quoteFirm = q.value.firm;
   run.priceLabel = q.value.firm ? "locked" : "indicative";
   run.settlementAmount = q.value.sourceAmount.amount;
+
+  const guaranteeEstimates = Boolean(opts.guaranteeEstimates ?? deps.guaranteeEstimates);
+  let guaranteedAmountStr: string | undefined;
+  if (guaranteeEstimates) {
+    guaranteedAmountStr =
+      typeof opts.guaranteedAmount === "string"
+        ? opts.guaranteedAmount
+        : (opts.guaranteedAmount?.amount ?? q.value.destAmount?.amount);
+  }
   {
-    const t = await advance("quoted");
+    const t = await advance("quoted", quoteSupplied ? { quoteSupplied: true } : undefined);
     if (!t.ok) return die(t.error);
   }
 
@@ -876,6 +919,22 @@ export async function execute(
       }),
     );
     if (!r.ok) return finishFailure(r.error);
+
+    if (guaranteeEstimates && guaranteedAmountStr) {
+      const actualAmount =
+        (typeof opts.actualAmount === "string"
+          ? opts.actualAmount
+          : opts.actualAmount?.amount) ??
+        r.value.amountOut?.amount ??
+        opened.value.amountOut?.amount;
+      if (actualAmount !== undefined) {
+        const diff = subAmounts(actualAmount, guaranteedAmountStr);
+        if (diff.ok) {
+          run.estimateGap = diff.value;
+        }
+      }
+    }
+
     {
       const t = await advance("reconciled");
       if (!t.ok) return die(t.error);
@@ -971,6 +1030,8 @@ interface AdvanceMeta {
   amountRefunded?: string;
   amountFee?: string;
   checks?: readonly CheckResult[];
+  /** The run's quote came from `ExecuteOptions.quote` instead of the anchor (#622). */
+  quoteSupplied?: boolean;
   /** Set by `advance` itself on the first transition out of `created`. */
   route?: RouteChoice;
 }
@@ -1267,6 +1328,7 @@ function toResult(run: StoredRun, trail: readonly CorridorState[]): RunResult {
     settlementKind: run.settlementKind,
     settlementRef: run.settlementRef,
     trail,
+    ...(run.estimateGap !== undefined ? { estimateGap: run.estimateGap } : {}),
   };
 }
 
@@ -1307,6 +1369,7 @@ async function emitTransition(
     amountRefunded?: string;
     amountFee?: string;
     checks?: readonly CheckResult[];
+    quoteSupplied?: boolean;
     route?: RouteChoice;
   },
 ): Promise<void> {
@@ -1323,6 +1386,7 @@ async function emitTransition(
     ...(meta?.networkFee && { networkFee: meta.networkFee }),
     ...(meta?.amountRefunded !== undefined && { amountRefunded: meta.amountRefunded }),
     ...(meta?.amountFee !== undefined && { amountFee: meta.amountFee }),
+    ...(meta?.quoteSupplied && { quoteSupplied: true }),
     // A copy, so a caller mutating its array afterwards cannot change what was recorded.
     ...(meta?.checks && meta.checks.length > 0 && { checks: [...meta.checks] }),
     ...(meta?.route && { route: meta.route }),

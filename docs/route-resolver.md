@@ -206,6 +206,28 @@ single-domain answer. It never throws: it returns `{ ok: true }` or
 `{ ok: false, reason, detail }`, where `detail` is the operator-facing message
 `UnattestedAnchorError` carries.
 
+## Reliability
+
+`reliability(anchor, deps)` in `@corridor/router` is the RFC 0004 reliability
+score for one receiving anchor, a number from 0 to 1 that a planner can use when
+it ranks route options. It is a score, not a resolver.
+
+- **Window.** Only this business's own runs on that anchor in the last 30 days
+  count. Older runs, future-dated runs and runs for another anchor are ignored.
+- **Too few runs.** With fewer than 20 counted runs, the observed success rate
+  is shrunk toward 0.5: `0.5 + (rate - 0.5) * n/20`. No runs scores 0.5, one
+  success scores 0.525, and from 20 runs on the plain success rate is used.
+- **Attestation age.** The rate is multiplied by
+  `max(0, 1 - staleness / 120_960)`, where staleness is the on-chain
+  attestation's age in ledgers. A fresh attestation leaves the score unchanged,
+  one half a week old halves it, and one at the router's one-week freshness bound
+  (120,960 ledgers) or older brings it to 0.
+- **No attestation scores 0.** An attestation that is missing or cannot be read
+  is unknown evidence, so the score is 0.
+
+The run history comes in through a read-only `ReliabilityRunStore` projection,
+so `@corridor/router` takes no dependency on the engine.
+
 ## The module contract
 
 `loadResolver(spec, { adapterFor })` (exported from `@corridor/router`) turns a

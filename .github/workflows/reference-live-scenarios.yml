@@ -1,0 +1,164 @@
+# Runs the reference anchor's failure modes on live testnet, against the
+# Anchor Platform reference stack we stand up ourselves (docs/operations.md,
+# "Live failure scenarios"):
+#
+#   #676  amounts below the anchor's minimum and above its maximum
+#   #673  the anchor asks for more customer information
+#   #675  the anchor goes down during the flow
+#
+# The fourth, #674 (the payout fails and the anchor refunds), already runs in
+# reference-corridor.yml after the happy path, on the same machinery.
+#
+# A sibling of reference-corridor.yml rather than more steps in it, so a red
+# happy path and a red failure scenario stay separate signals. Every scenario
+# asserts its terminal state and, from Horizon, that the payment's money moved
+# at most once, and writes a PASS/FAIL block to the job summary.
+name: reference-live-scenarios
+on:
+  workflow_dispatch:
+  schedule:
+    # After reference-corridor (05:43) and reference-crash-resume (06:43, up to
+    # 30 minutes), which settle from the same signer: two runs at once would
+    # race its sequence number.
+    - cron: "23 7 * * *"
+
+permissions:
+  contents: read
+
+# One at a time, for the same reason.
+concurrency:
+  group: reference-live-scenarios
+  cancel-in-progress: false
+
+jobs:
+  scenarios:
+    runs-on: ubuntu-latest
+    # The stack takes minutes to boot, and the outage scenario restarts the
+    # anchor's server and then waits out the engine's backed-off polling.
+    timeout-minutes: 50
+    # Job-level, deliberately: the `secrets` context is not available in a
+    # step-level `if:` (see reference-corridor.yml).
+    env:
+      SIGNER_SECRET: ${{ secrets.CORRIDOR_SIGNER_SECRET }}
+      DISTRIBUTION_SECRET: ${{ secrets.REFERENCE_DISTRIBUTION_SECRET }}
+      MANIFEST: corridors/reference.corridor.yaml
+      # Never set — the runners' mainnet guard is the backstop.
+      CORRIDOR_ALLOW_MAINNET: ""
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # --- guards, before anything is stood up or signed -------------------
+
+      - name: Refuse a non-testnet corridor
+        run: pnpm exec tsx scripts/assert-testnet-corridor.ts "$MANIFEST"
+
+      - name: Check the scenarios' prerequisites
+        run: |
+          set -euo pipefail
+          missing=""
+          grep -q 'doctor)' scripts/reference-anchor.sh \
+            || missing="$missing scripts/reference-anchor.sh#doctor"
+          grep -q 'outage)' scripts/reference-anchor.sh \
+            || missing="$missing scripts/reference-anchor.sh#faults-outage(#675)"
+          test -x scripts/fault-scenario.sh \
+            || missing="$missing scripts/fault-scenario.sh"
+          node -e 'process.exit(require("./package.json").scripts["verify:scenario-limits"] ? 0 : 1)' \
+            || missing="$missing pnpm-verify:scenario-limits(#676)"
+          if [ -n "$missing" ]; then
+            echo "::error::this job needs, and cannot find:$missing"
+            exit 1
+          fi
+
+      - name: Fail early without a signing key
+        if: ${{ env.SIGNER_SECRET == '' }}
+        run: |
+          echo "::error::CORRIDOR_SIGNER_SECRET is not set. The scenarios settle on" \
+               "testnet and cannot run unsigned — set the repository secret to a funded" \
+               "testnet seed."
+          exit 1
+
+      - name: Fail early without the anchor's receiving key
+        if: ${{ env.DISTRIBUTION_SECRET == '' }}
+        run: |
+          echo "::error::REFERENCE_DISTRIBUTION_SECRET is not set. The reference anchor needs" \
+               "a receiving account only this repo controls — set the repository secret to" \
+               "a testnet seed; pnpm prepare:distribution creates the account."
+          exit 1
+
+      # --- the stack ---------------------------------------------------------
+
+      # Writes DISTRIBUTION_ACCOUNT to $GITHUB_ENV for `up`.
+      - name: Prepare the anchor's receiving account
+        run: pnpm prepare:distribution
+
+      # SEND_MIN_AMOUNT gives the limits scenario a minimum to go below (the
+      # image advertises 0). 5 keeps the other scenarios' 10.00 inside the
+      # limits, and the 4.00 below it clear of the reference server's 1.00 quote
+      # fee (docs/operations.md).
+      - name: Stand up the reference anchor
+        run: scripts/reference-anchor.sh up
+        env:
+          READY_TIMEOUT_SECS: "600"
+          SEND_MIN_AMOUNT: "5"
+
+      - name: Health gate
+        run: scripts/reference-anchor.sh doctor
+
+      # --- the scenarios -----------------------------------------------------
+      #
+      # No payout-watch anywhere in this job: `faults` is the payout operator
+      # for a faulted run, and the limits scenario never reaches a payout.
+      # Each fault waits for the NEXT payment, so the steps run one at a time.
+
+      - name: "#676 Amounts outside the anchor's limits"
+        run: pnpm verify:scenario-limits
+        env:
+          CORRIDOR_SIGNER_SECRET: ${{ env.SIGNER_SECRET }}
+
+      - name: "#673 The anchor asks for more customer information"
+        run: |
+          set -euo pipefail
+          pnpm fund:testnet
+          scripts/fault-scenario.sh ask-info held
+        env:
+          CORRIDOR_SIGNER_SECRET: ${{ env.SIGNER_SECRET }}
+          FUND_AMOUNT: "30"
+          FUND_MIN_BALANCE: "50"
+          SCENARIO: "The anchor asks for more customer information (#673)"
+          FAULT_LOG_DIR: anchor-logs/ask-info
+
+      - name: "#675 The anchor goes down during the flow"
+        run: |
+          set -euo pipefail
+          pnpm fund:testnet
+          scripts/fault-scenario.sh outage=45 completed
+        env:
+          CORRIDOR_SIGNER_SECRET: ${{ env.SIGNER_SECRET }}
+          FUND_AMOUNT: "30"
+          FUND_MIN_BALANCE: "50"
+          SCENARIO: "The anchor goes down during the flow (#675)"
+          FAULT_LOG_DIR: anchor-logs/outage
+
+      # --- evidence and cleanup ---------------------------------------------
+
+      - name: Collect platform logs
+        if: ${{ failure() }}
+        run: scripts/reference-anchor.sh logs-dump anchor-logs
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ failure() }}
+        with:
+          name: live-scenarios-anchor-logs-${{ github.run_id }}
+          path: anchor-logs/
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Tear down
+        if: ${{ always() }}
+        run: scripts/reference-anchor.sh down

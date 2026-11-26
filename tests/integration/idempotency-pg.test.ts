@@ -223,6 +223,27 @@ run("PostgresIdempotencyStore (live Postgres)", () => {
     expect(got?.lastError).toBeUndefined();
   });
 
+  it("round-trips estimateGap through create, get and listByState (#627)", async () => {
+    const s = store();
+    // Written on create: a negative gap (a loss the business absorbed).
+    await s.create({ ...newRun("k-gap"), estimateGap: "-2.5" });
+    expect((await s.get("k-gap"))?.estimateGap).toBe("-2.5");
+
+    // A later write without a gap keeps the stored one.
+    await s.put({ ...newRun("k-gap"), state: "reconciled", version: 1 });
+    expect((await s.get("k-gap"))?.estimateGap).toBe("-2.5");
+
+    // A later write with a gap records the new one, and listByState reads it too.
+    await s.put({ ...newRun("k-gap"), state: "completed", version: 2, estimateGap: "0" });
+    expect((await s.get("k-gap"))?.estimateGap).toBe("0");
+    const listed = await s.listByState("completed");
+    expect(listed.find((r) => r.idempotencyKey === "k-gap")?.estimateGap).toBe("0");
+
+    // A run with no gap reads back undefined, not null.
+    await s.create(newRun("k-no-gap"));
+    expect((await s.get("k-no-gap"))?.estimateGap).toBeUndefined();
+  });
+
   it("round-trips settlementKind and settlementRef (adapter and stellar)", async () => {
     const s = store();
     await s.create(newRun("k-adapter"));
@@ -327,7 +348,7 @@ run("PostgresIdempotencyStore (live Postgres)", () => {
     });
   });
 
-  it("adds receiving_domain, route_protocol and price_label to a table created by the previous version", async () => {
+  it("adds receiving_domain, route_protocol, price_label and estimate_gap to a table created by the previous version", async () => {
     await pool.query("drop table if exists corridor_resolutions");
     await pool.query("drop table if exists corridor_runs");
     await pool.query(`
@@ -355,6 +376,7 @@ run("PostgresIdempotencyStore (live Postgres)", () => {
     expect(legacy?.receivingDomain).toBeUndefined();
     expect(legacy?.routeProtocol).toBeUndefined();
     expect(legacy?.priceLabel).toBeUndefined();
+    expect(legacy?.estimateGap).toBeUndefined();
 
     await s.create(newRun("migrated-pinned"));
     await s.put({
@@ -385,5 +407,14 @@ run("PostgresIdempotencyStore (live Postgres)", () => {
     expect(stillPinned?.receivingDomain).toBe("zeam.money");
     expect(stillPinned?.routeProtocol).toBe("sep31");
     expect(stillPinned?.priceLabel).toBe("locked");
+
+    await s.put({
+      idempotencyKey: "migrated-pinned",
+      corridorId: "c",
+      state: "completed",
+      version: 3,
+      estimateGap: "5",
+    });
+    expect((await s.get("migrated-pinned"))?.estimateGap).toBe("5");
   });
 });
