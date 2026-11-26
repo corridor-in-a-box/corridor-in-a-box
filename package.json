@@ -31,6 +31,7 @@
     "format": "prettier --write .",
     "prepare": "lefthook install",
     "cli": "tsx packages/cli/src/index.ts",
+    "deploy:contracts": "tsx scripts/deploy-contracts.ts",
     "example": "tsx examples/run-payment.ts",
     "example:stub": "tsx examples/run-stub-adapter.ts",
     "example:plan-and-pay": "tsx examples/plan-and-pay.ts",

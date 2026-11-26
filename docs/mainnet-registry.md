@@ -4,7 +4,7 @@ This document specifies the readiness criteria, operational procedures, security
 
 ---
 
-## 1. Entry Criteria
+## 1. Entry Criteria & Readiness Checklist
 
 Before initiating mainnet deployment, the following milestones must be fully met and verified:
 
@@ -16,8 +16,20 @@ Before initiating mainnet deployment, the following milestones must be fully met
    - Rehearse `upgrade(new_wasm_hash)` on the testnet deployment (`contracts/deployments.json:testnet`).
    - Verify that an upgraded WASM retains existing `Anchor(domain)` state, domain list indices, and attester permissions without state migration failures.
 3. **4 Weeks of Unbroken Testnet Attestations**:
-   - Maintain a minimum of 4 consecutive weeks of green, scheduled daily attestations via `.github/workflows/attest-anchors.yml` against live anchors.
-   - Confirm that flappings or network blips are accurately reported without contract reverts or unhandled exceptions.
+   - Maintain a minimum of 4 consecutive weeks (28 unbroken days) of green, scheduled daily attestations via `.github/workflows/attest-anchors.yml` against live anchors.
+   - **Clock Reset Date**: The testnet attest job was failing due to contract incompatibility until the contracts were upgraded on **2026-11-17**. The 4-week observation window officially starts from this date.
+   - **Earliest Possible Deploy Date**: **2026-12-15** (28 consecutive days after the 2026-11-17 restart).
+   - Any unhandled exception or contract revert resets the clock.
+
+### Readiness Checklist
+
+| Milestone                        |     Status      |   Start Date   | Target / Earliest Date | Notes                                                                                       |
+| :------------------------------- | :-------------: | :------------: | :--------------------: | :------------------------------------------------------------------------------------------ |
+| **Storage TTL Extension (#245)** |  [x] Complete   |       —        |       2026-10-20       | Persistent storage TTL bump logic verified.                                                 |
+| **Testnet Upgrade Rehearsal**    |  [x] Complete   |       —        |       2026-10-25       | Rehearsed `upgrade()` retaining anchor entries.                                             |
+| **4-Week Attestation Window**    | [ ] In Progress | **2026-11-17** |     **2026-12-15**     | Clock reset following 2026-11-17 contract upgrade. Minimum 28 unbroken daily runs required. |
+| **Multisig Custody Signoff**     |   [ ] Pending   |       —        |       2026-12-15       | 2-of-3 multisig keys provisioned in hardware/KMS.                                           |
+| **Testnet Deployment Rehearsal** |  [x] Complete   |   2026-11-19   |       2026-11-19       | Verified sequence using `scripts/deploy-contracts.ts`.                                      |
 
 ---
 
