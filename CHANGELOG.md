@@ -19,6 +19,74 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   (at least 7 days of data and 100 samples in the last 7 days), with the counts behind it.
 - With no source configured, an unreadable source, or no data for a pair, the chart shows an
   empty state and no numbers.
+### Added — rate history minimum-data rule for estimated prices ([#598](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/598))
+
+- `@corridor/router` exports `assessRateHistory` (`packages/router/src/rate-history.ts`): given the
+  rate history held for a pair at an anchor, it answers whether an `estimated` price may be shown
+  at all, per RFC 0004 §3: at least 100 samples in the 7-day window, and a history reaching back
+  at least 7 days (`now` minus the oldest usable sample, measured over all the history passed in).
+  It returns `{ ok: true, p25, samples }` or `{ ok: false, reason }`.
+- It asks `buildEstimatedOption` rather than re-implementing the rule, so both use the same
+  defaults (`DEFAULT_MIN_ESTIMATE_SAMPLES`, `DEFAULT_MIN_ESTIMATE_SPAN_DAYS`,
+  `DEFAULT_ESTIMATE_WINDOW_DAYS`), the same sample filtering (malformed, non-positive, future and
+  outlier-flagged samples are left out) and the same P25. Window and both thresholds are
+  configurable.
+
+### Added — lane check v1: authorised GET /sep31/info probe ([#632](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/632))
+
+- `checkLane` in `@corridor/router` now runs two steps: the SEP-10 login through
+  adapter-kit's `Sep10Client` (`sep10_auth`), then `GET <transfer_server_sep31>/info`
+  with the JWT as bearer (`sep31_info`). The lane is `open` only when both pass and the
+  `/info` receive list includes the corridor's on-chain asset (`settlement.receive_asset`,
+  else `settlement.bridge_asset`), matched by asset code and not `enabled: false`.
+- A result that is not open names the step that stopped it in a new `failedStep` field
+  (`LaneCheckStep` is exported). `/info` answering 401 or 403, or not receiving the asset,
+  is `closed`; a 5xx, timeout, malformed body or a corridor with no SEP-31 endpoint is
+  `unknown`. The JWT is sent only to the manifest's SEP-31 server and is never returned.
+- `tests/lane-check.test.ts` covers the bearer header, each refusal and unknown case at
+  `sep31_info`, and asserts `failedStep` on the existing SEP-10 cases.
+
+### Added — Published history of nightly reference runs ([#680](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/680))
+
+- Each nightly `reference-corridor` run is recorded in `web/lib/generated/reference-runs.json`:
+  run id, date, outcome (`success`, `failure` or `cancelled`), duration, the state trail, the
+  settle tx hashes and the run's URL. Newest first, capped at 180 runs. Failed and cancelled
+  runs are recorded too, a re-run replaces its own record, and a corrupt history stops the
+  writer instead of being overwritten.
+- `pnpm record:reference-run` (`scripts/record-reference-run.ts`, `scripts/reference-runs.ts`)
+  writes it. `web/lib/reference-runs.ts` reads it: the list, the latest run (the same source as
+  the #586 dashboard panel) and a success-rate and duration summary.
+- The workflow commits it from a separate `publish-history` job (`needs: corridor`,
+  `if: always()`, `permissions: contents: write`) that reads no secrets and runs no
+  `pnpm install`. The `corridor` job keeps `CORRIDOR_SIGNER_SECRET` on its verify step, is
+  read-only, keeps the runner's real exit status through `tee`, and hands the run's facts over
+  as an artifact. Documented in `docs/operations.md`.
+
+### Added — Fall back to the next route before funds move ([#626](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/626))
+
+- When the primary route fails before any funds move (a refused quote, a KYC rejection, or a
+  transaction that cannot be opened), the engine tries the resolver's alternates as linked runs
+  under `<key>:alt1`, `<key>:alt2`, up to `maxAlternates` (default 2; `0` turns fallback off).
+  Once a run reaches `settling`, no other route is tried.
+- A resumed run whose route now resolves to a different receiving domain than the one stored on
+  the run (#734) is refused with `ROUTE_PINNED`.
+- The router's resolver option type is `RouteCandidate`, so it does not clash with the planner's
+  RFC 0004 `RouteOption`.
+
+### Added — router ranking function ([#611](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/611))
+
+- `rank(options, { estimateMarginBps })` in `@corridor/router` orders route options per RFC 0004
+  §1 "Ranking": by the cautious recipient amount, then reliability, then delivery time, then
+  receiving domain, with no hidden weights. It is pure: it returns a new array and never
+  changes its input, and options equal on every key keep their input order.
+- The cautious amount comes from the price label: a `locked` amount as quoted, an `indicative`
+  or `estimated` (P25) amount minus the estimate margin (default 50 bps, RFC 0004 D3).
+  `cautiousRecipientAmount` exposes that step. Amounts stay decimal strings on scaled BigInts.
+- Domains compare by code unit, so the order is the same under every locale. A malformed or
+  negative amount, an unknown label, a reliability outside 0..1 or options in different assets
+  throw a `RangeError` instead of ranking silently wrong.
+- A full `RouteOption` can be ranked directly. Property tests use the repo's seeded generator:
+  the result is a permutation of the input and stable for equal inputs.
 
 ### Added — estimate gap when a business guarantees estimated prices ([#627](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/627))
 
