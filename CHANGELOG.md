@@ -22,6 +22,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 - `pnpm rate:collector` (`examples/run-rate-collector.ts`) registers the step. Pruning adds no
   table; the collector's database role needs `delete` on `rate_samples` (`docs/operations.md`).
   `docs/rate-history.md` now states the retention.
+
 ### Added — SEP-6 corridors are candidates only with `third_party_payout` ([#645](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/645))
 
 - The router's planner step 1, `candidates(request, corridors)` in `@corridor/router`, keeps a
