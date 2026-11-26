@@ -1,376 +1,336 @@
 // Rate history: retention and pruning (#599, RFC 0004 §3).
 //
-// Raw rate samples collected every 15 minutes grow quickly. Daily summaries (rate_daily)
-// are retained forever, while raw samples older than the retention period (default 90 days)
-// are pruned once per day inside the collector loop in bounded batches.
+// Raw rate samples arrive every 15 minutes for every series, so `rate_samples` grows quickly.
+// Daily summaries (`rate_daily_summaries`) are kept forever; raw samples are kept for a
+// configurable number of whole UTC days (default 90) and then pruned, once a day, by a step
+// in the rate collector loop (`createPruningCollectorStep`), in bounded batches.
 //
-// Strict Guard: A raw sample is NEVER deleted unless a matching daily summary row
-// exists in rate_daily for the exact same pair, source, network and UTC calendar day.
-// This invariant is enforced directly in the deletion query so no race condition can bypass it.
+// The guard: a raw sample is deleted only when its series (network, sell asset, buy asset,
+// source, anchor domain) has a `rate_daily_summaries` row for the sample's UTC day that was
+// computed after the sample was recorded. A day with no summary, or a sample that arrived
+// after its day was summarised, is kept. The guard is part of the DELETE itself, so no other
+// code path can skip it. Samples are never pruned for being outliers (#602).
+//
+// Retention can never be set below 7 days: the minimum-data rule and the default `estimated`
+// window (RFC 0004 D3 and §3) read the last 7 days of raw samples.
+//
+// The tables are created by `migrate()` (idempotency-pg.ts, from rate-samples-pg.ts). Pruning
+// keeps no state of its own: re-running it is a no-op once a day's eligible rows are gone.
 
 import type { Queryable } from "./idempotency-pg";
 import { silentLogger, type Logger } from "./observability";
+import type { CollectorStep, CollectorStepResult } from "./rate-collector-loop";
 
-/** Default retention period for raw rate samples in days (RFC 0004 §3 / Issue #599). */
+/** Default number of whole UTC days of raw samples to keep (#599). */
 export const DEFAULT_RETENTION_DAYS = 90;
 
-/** Default batch size for iterative deletions to avoid table lock contention. */
-export const DEFAULT_PRUNE_BATCH_SIZE = 1000;
+/**
+ * The shortest retention allowed. The minimum-data rule (7 days of data) and the default
+ * `estimated` window (the last 7 days, RFC 0004 D3) read raw samples, so they must survive.
+ */
+export const MIN_RETENTION_DAYS = 7;
 
-/** Maximum batches allowed per pruning run to bound execution time. */
+/** Default rows deleted per batch, so no single statement holds locks for long. */
+export const DEFAULT_PRUNE_BATCH_SIZE = 1_000;
+
+/** Default batches per run. A larger backlog carries over to the next tick. */
 export const DEFAULT_MAX_PRUNE_BATCHES = 100;
 
+/** Default number of blocked (series, day) pairs a run reports. */
+export const DEFAULT_BLOCKED_REPORT_LIMIT = 100;
+
+const MAX_BATCH_SIZE = 10_000;
+const DAY_MS = 86_400_000;
+
 /**
- * Validates and parses the raw rate sample retention period in days.
- * Rejects zero, negative values, floats, and non-numeric strings with a clear Error.
+ * Parse a retention period in whole days, e.g. from `RATE_RETENTION_DAYS`. Unset or empty
+ * returns `fallback`. Anything that is not an integer of at least 7 throws a RangeError.
  */
 export function parseRetentionDays(
-  val?: string | number | null,
+  value?: string | number | null,
   fallback: number = DEFAULT_RETENTION_DAYS,
 ): number {
-  if (val === undefined || val === null || val === "") {
-    return fallback;
-  }
-
-  let parsedNum: number;
-  if (typeof val === "number") {
-    parsedNum = val;
-  } else {
-    const trimmed = String(val).trim();
-    if (!/^-?\d+$/.test(trimmed)) {
-      throw new Error(
-        `Invalid retention period: "${val}". Must be a positive integer (number of days).`,
-      );
-    }
-    parsedNum = Number(trimmed);
-  }
-
-  if (!Number.isInteger(parsedNum) || parsedNum <= 0 || !Number.isFinite(parsedNum)) {
-    throw new Error(
-      `Invalid retention period: "${val}". Must be a positive integer (number of days).`,
+  if (value === undefined || value === null || value === "")
+    return assertRetentionDays(fallback);
+  if (typeof value === "string" && !/^\d+$/.test(value.trim())) {
+    throw new RangeError(
+      `retention must be a whole number of days, at least ${MIN_RETENTION_DAYS}; got ${JSON.stringify(value)}`,
     );
   }
+  return assertRetentionDays(typeof value === "number" ? value : Number(value.trim()));
+}
 
-  return parsedNum;
+function assertRetentionDays(days: number): number {
+  if (!Number.isSafeInteger(days) || days < MIN_RETENTION_DAYS) {
+    throw new RangeError(
+      `retention must be a whole number of days, at least ${MIN_RETENTION_DAYS} (the minimum-data rule and the estimate window read the last 7 days of raw samples); got ${String(days)}`,
+    );
+  }
+  return days;
+}
+
+function assertPositiveInteger(value: number, field: string, max = Number.MAX_SAFE_INTEGER) {
+  if (!Number.isSafeInteger(value) || value < 1 || value > max) {
+    throw new RangeError(`${field} must be an integer from 1 to ${max}, got ${String(value)}`);
+  }
+}
+
+/** The UTC calendar day of a time, as `YYYY-MM-DD`. */
+export function utcDayString(at: Date | number = Date.now()): string {
+  return new Date(typeof at === "number" ? at : at.getTime()).toISOString().slice(0, 10);
 }
 
 /**
- * Returns the calendar day formatted as "YYYY-MM-DD" in UTC timezone.
- */
-export function utcDayString(dateOrMs: Date | number = Date.now()): string {
-  const d = typeof dateOrMs === "number" ? new Date(dateOrMs) : dateOrMs;
-  const year = d.getUTCFullYear();
-  const month = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(d.getUTCDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-/**
- * Calculates the exact cutoff timestamp for retentionDays prior to `now`.
- * Any sample strictly older than this cutoff (sampled_at < cutoff) is eligible for pruning.
+ * The prune cutoff: midnight UTC `retentionDays` days before the start of today (UTC).
+ * Samples taken strictly before it are eligible, so whole UTC days are pruned, today and the
+ * `retentionDays` days before it are always kept, and no day is ever left half-pruned.
  */
 export function calculateRetentionCutoff(
   retentionDays: number,
-  nowOrMs: Date | number = Date.now(),
+  now: Date | number = Date.now(),
 ): Date {
-  const nowMs = typeof nowOrMs === "number" ? nowOrMs : nowOrMs.getTime();
-  return new Date(nowMs - retentionDays * 86_400_000);
+  assertRetentionDays(retentionDays);
+  const nowMs = typeof now === "number" ? now : now.getTime();
+  const startOfToday = Math.floor(nowMs / DAY_MS) * DAY_MS;
+  return new Date(startOfToday - retentionDays * DAY_MS);
 }
 
 /**
- * Batched deletion query enforcing the summary guard in SQL.
- * Deletes oldest samples first up to $2 limit, ONLY if a daily summary exists for that
- * exact (pair, source, network, UTC day).
+ * The guard, as a SQL predicate over a `rate_samples` row aliased `s`: its series has a
+ * summary for its UTC day, computed after the sample was recorded. `anchor_domain` is null for
+ * anchorless sources, so it is compared with `is not distinct from`.
  */
-export const DELETE_PRUNABLE_SAMPLES_SQL = `
-delete from rate_samples
-where id in (
+const SUMMARISED_SQL = `exists (
+      select 1
+      from rate_daily_summaries d
+      where d.network = s.network
+        and d.sell_asset = s.sell_asset
+        and d.buy_asset = s.buy_asset
+        and d.source = s.source
+        and d.anchor_domain is not distinct from s.anchor_domain
+        and d.day = (s.sampled_at at time zone 'UTC')::date
+        and d.computed_at >= s.recorded_at
+    )`;
+
+/**
+ * One batch: delete up to $2 of the oldest samples taken before $1 that pass the guard, and
+ * return how many went. `skip locked` lets two collectors prune at once without waiting on
+ * each other.
+ */
+export const PRUNE_RATE_SAMPLES_SQL = `
+with doomed as (
   select s.id
   from rate_samples s
   where s.sampled_at < $1
-    and exists (
-      select 1
-      from rate_daily d
-      where d.day = (s.sampled_at at time zone 'UTC')::date
-        and d.pair = s.pair
-        and d.source = s.source
-        and d.network = s.network
-    )
-  order by s.sampled_at asc
+    and ${SUMMARISED_SQL}
+  order by s.sampled_at, s.id
   limit $2
+  for update of s skip locked
+), deleted as (
+  delete from rate_samples r
+  using doomed
+  where r.id = doomed.id
+  returning 1
 )
-returning id;
+select count(*)::int as deleted from deleted;
 `;
 
 /**
- * Checks for any raw samples older than cutoff that lack a matching daily summary
- * for the same pair, source, network and UTC day.
+ * The (series, day) pairs older than $1 the guard keeps, with their sample counts, oldest
+ * first, at most $2 of them: days not summarised yet, and days with samples recorded after
+ * their summary was computed.
  */
 export const SELECT_UNSUMMARIZED_DAYS_SQL = `
-select distinct
-  (s.sampled_at at time zone 'UTC')::date as unsummarized_day,
-  s.pair,
-  s.source,
-  s.network
+select s.network, s.sell_asset, s.buy_asset, s.source, s.anchor_domain,
+       to_char((s.sampled_at at time zone 'UTC')::date, 'YYYY-MM-DD') as day,
+       count(*)::int as samples
 from rate_samples s
 where s.sampled_at < $1
-  and not exists (
-    select 1
-    from rate_daily d
-    where d.day = (s.sampled_at at time zone 'UTC')::date
-      and d.pair = s.pair
-      and d.source = s.source
-      and d.network = s.network
-  )
-order by unsummarized_day asc;
+  and not ${SUMMARISED_SQL}
+group by s.network, s.sell_asset, s.buy_asset, s.source, s.anchor_domain, day
+order by day, s.network, s.sell_asset, s.buy_asset, s.source, s.anchor_domain nulls first
+limit $2;
 `;
 
-/** Reads durable pruning state to survive process restarts without duplicate pruning. */
-export const SELECT_PRUNING_STATE_SQL = `
-select last_pruned_day, last_pruned_at, rows_deleted, batches
-from rate_pruning_state
-where key = $1;
-`;
-
-/** Upserts durable pruning state after a successful daily run. */
-export const UPSERT_PRUNING_STATE_SQL = `
-insert into rate_pruning_state (key, last_pruned_day, last_pruned_at, rows_deleted, batches)
-values ($1, $2, $3, $4, $5)
-on conflict (key) do update set
-  last_pruned_day = excluded.last_pruned_day,
-  last_pruned_at = excluded.last_pruned_at,
-  rows_deleted = excluded.rows_deleted,
-  batches = excluded.batches;
-`;
-
+/** One series and UTC day past the cutoff whose raw samples the guard kept. */
 export interface UnsummarizedDayRecord {
-  readonly unsummarizedDay: string;
-  readonly pair: string;
-  readonly source: string;
   readonly network: string;
+  readonly sellAsset: string;
+  readonly buyAsset: string;
+  readonly source: string;
+  readonly anchorDomain: string | null;
+  /** `YYYY-MM-DD`, UTC. */
+  readonly day: string;
+  /** Raw samples kept for that series and day. */
+  readonly samples: number;
 }
 
 export interface RatePruningOptions {
-  /** Retention period in days, or env string value (e.g. process.env.RATE_RETENTION_DAYS). Default 90. */
-  readonly retentionDays?: number | string | null;
-  /** Number of rows to delete per batch. Default 1000. */
+  /** Whole UTC days of raw samples to keep, at least 7. Default 90. */
+  readonly retentionDays?: number;
+  /** Rows deleted per batch (1 to 10,000). Default 1,000. */
   readonly batchSize?: number;
-  /** Maximum batches allowed per pruning invocation. Default 100. */
+  /** Batches per run. Default 100. */
   readonly maxBatches?: number;
-  /** Clock provider for testing. Defaults to Date.now. */
+  /** At most this many blocked (series, day) pairs are reported. Default 100. */
+  readonly blockedReportLimit?: number;
+  /** Clock, for tests. Default `Date.now`. */
   readonly now?: () => number | Date;
-  /** Operational logger. Defaults to silentLogger. */
+  /** Default `silentLogger`. */
   readonly logger?: Logger;
-  /** Key identifying this pruner in rate_pruning_state. Default "rate_samples_daily". */
-  readonly stateKey?: string;
-  /** Force execution even if already run today. Default false. */
-  readonly force?: boolean;
 }
 
 export interface RatePruningResult {
-  readonly status: "completed" | "skipped_already_run_today";
+  /** UTC day the run happened, `YYYY-MM-DD`. */
   readonly day: string;
+  /** ISO timestamp; samples taken before it were eligible. */
   readonly cutoff: string;
+  readonly retentionDays: number;
   readonly rowsDeleted: number;
   readonly batches: number;
-  readonly unsummarizedDaysSkipped: string[];
-  readonly unsummarizedSkipped?: UnsummarizedDayRecord[];
+  /** False when `maxBatches` ran out with rows still eligible; the next run carries on. */
+  readonly complete: boolean;
+  /** Series-days past the cutoff the guard kept (at most `blockedReportLimit`). */
+  readonly blocked: readonly UnsummarizedDayRecord[];
+}
+
+interface BlockedRow {
+  network: string;
+  sell_asset: string;
+  buy_asset: string;
+  source: string;
+  anchor_domain: string | null;
+  day: string;
+  samples: number | string;
+}
+
+function resolveOptions(options: RatePruningOptions) {
+  const retentionDays = assertRetentionDays(options.retentionDays ?? DEFAULT_RETENTION_DAYS);
+  const batchSize = options.batchSize ?? DEFAULT_PRUNE_BATCH_SIZE;
+  const maxBatches = options.maxBatches ?? DEFAULT_MAX_PRUNE_BATCHES;
+  const blockedReportLimit = options.blockedReportLimit ?? DEFAULT_BLOCKED_REPORT_LIMIT;
+  assertPositiveInteger(batchSize, "batchSize", MAX_BATCH_SIZE);
+  assertPositiveInteger(maxBatches, "maxBatches");
+  assertPositiveInteger(blockedReportLimit, "blockedReportLimit");
+  return { retentionDays, batchSize, maxBatches, blockedReportLimit };
+}
+
+function nowMs(now?: () => number | Date): number {
+  const value = now ? now() : Date.now();
+  return typeof value === "number" ? value : value.getTime();
 }
 
 /**
- * Executes rate sample pruning against the database with batching and strict summary guard.
+ * Delete raw samples older than the retention period whose day has been summarised, oldest
+ * first, in batches. Daily summaries are never touched. Errors from the database propagate.
  */
 export async function pruneRateSamples(
   db: Queryable,
   options: RatePruningOptions = {},
 ): Promise<RatePruningResult> {
-  const retentionDays = parseRetentionDays(
-    options.retentionDays ??
-      process.env.RATE_RETENTION_DAYS ??
-      process.env.RATE_SAMPLE_RETENTION_DAYS,
-  );
-  const batchSize = options.batchSize ?? DEFAULT_PRUNE_BATCH_SIZE;
-  const maxBatches = options.maxBatches ?? DEFAULT_MAX_PRUNE_BATCHES;
+  const { retentionDays, batchSize, maxBatches, blockedReportLimit } = resolveOptions(options);
   const logger = options.logger ?? silentLogger;
-  const stateKey = options.stateKey ?? "rate_samples_daily";
+  const at = nowMs(options.now);
+  const day = utcDayString(at);
+  const cutoff = calculateRetentionCutoff(retentionDays, at).toISOString();
 
-  const nowVal = options.now ? options.now() : Date.now();
-  const nowMs = typeof nowVal === "number" ? nowVal : nowVal.getTime();
-  const todayUtc = utcDayString(nowMs);
-  const cutoffDate = calculateRetentionCutoff(retentionDays, nowMs);
-
-  // 1. Check if already pruned today (survives restarts)
-  if (!options.force) {
-    try {
-      const stateRes = await db.query<{ last_pruned_day: string }>(SELECT_PRUNING_STATE_SQL, [
-        stateKey,
-      ]);
-      if (stateRes.rows.length > 0 && stateRes.rows[0].last_pruned_day === todayUtc) {
-        logger.log("debug", "corridor.rate_pruning.skipped_already_run_today", {
-          message: "Pruning already completed for UTC day; skipping run",
-          day: todayUtc,
-        });
-        return {
-          status: "skipped_already_run_today",
-          day: todayUtc,
-          cutoff: cutoffDate.toISOString(),
-          rowsDeleted: 0,
-          batches: 0,
-          unsummarizedDaysSkipped: [],
-          unsummarizedSkipped: [],
-        };
-      }
-    } catch {
-      // Table may not yet exist in unmigrated test harness; continue
-    }
-  }
-
-  // 2. Identify unsummarized records older than cutoff to make missing summaries visible
-  let unsummarizedDaysSkipped: string[] = [];
-  let unsummarizedSkipped: UnsummarizedDayRecord[] = [];
-
-  try {
-    const unsummarizedRes = await db.query<{
-      unsummarized_day: string | Date;
-      pair: string;
-      source: string;
-      network: string;
-    }>(SELECT_UNSUMMARIZED_DAYS_SQL, [cutoffDate]);
-
-    unsummarizedSkipped = unsummarizedRes.rows.map((r) => {
-      const dayStr =
-        r.unsummarized_day instanceof Date
-          ? utcDayString(r.unsummarized_day)
-          : String(r.unsummarized_day).slice(0, 10);
-      return {
-        unsummarizedDay: dayStr,
-        pair: r.pair,
-        source: r.source,
-        network: r.network,
-      };
-    });
-
-    unsummarizedDaysSkipped = Array.from(
-      new Set(unsummarizedSkipped.map((r) => r.unsummarizedDay)),
-    );
-
-    if (unsummarizedSkipped.length > 0) {
-      logger.log("warn", "corridor.rate_pruning.unsummarized_days_skipped", {
-        message: `Skipped pruning raw rate samples for ${unsummarizedSkipped.length} series older than cutoff because no matching daily summary exists`,
-        skipped: unsummarizedSkipped,
-        skippedDays: unsummarizedDaysSkipped,
-        cutoff: cutoffDate.toISOString(),
-      });
-    }
-  } catch {
-    // If SELECT query fails, proceed to attempt delete or throw
-  }
-
-  // 3. Batched deletion loop
   let rowsDeleted = 0;
   let batches = 0;
-
+  let complete = false;
   while (batches < maxBatches) {
-    const res = await db.query<{ id: string | number }>(DELETE_PRUNABLE_SAMPLES_SQL, [
-      cutoffDate,
+    const res = await db.query<{ deleted: number | string }>(PRUNE_RATE_SAMPLES_SQL, [
+      cutoff,
       batchSize,
     ]);
-    const count = res.rows.length;
-    rowsDeleted += count;
+    const deleted = Number(res.rows[0]?.deleted ?? 0);
+    rowsDeleted += deleted;
     batches++;
-
-    if (count < batchSize) {
-      // No further eligible rows remain
+    if (deleted < batchSize) {
+      complete = true;
       break;
     }
   }
 
-  // 4. Update durable state
-  try {
-    await db.query(UPSERT_PRUNING_STATE_SQL, [
-      stateKey,
-      todayUtc,
-      new Date(nowMs),
+  const blockedRes = await db.query<BlockedRow>(SELECT_UNSUMMARIZED_DAYS_SQL, [
+    cutoff,
+    blockedReportLimit,
+  ]);
+  const blocked = blockedRes.rows.map((r) => ({
+    network: r.network,
+    sellAsset: r.sell_asset,
+    buyAsset: r.buy_asset,
+    source: r.source,
+    anchorDomain: r.anchor_domain,
+    day: r.day,
+    samples: Number(r.samples),
+  }));
+
+  if (blocked.length > 0) {
+    logger.log("warn", "corridor.rate_pruning.unsummarized_days_skipped", {
+      message: `kept raw samples past the retention cutoff for ${blocked.length} series-days with no up-to-date daily summary`,
+      cutoff,
+      blocked,
+      truncated: blocked.length === blockedReportLimit,
+    });
+  }
+  if (!complete) {
+    logger.log("warn", "corridor.rate_pruning.batch_limit_reached", {
+      message: `stopped after ${batches} batches with rows still eligible; the next run continues`,
       rowsDeleted,
       batches,
-    ]);
-  } catch {
-    // If DB state table is missing, proceed
+      cutoff,
+    });
   }
-
   logger.log("info", "corridor.rate_pruning.completed", {
-    message: `Pruned ${rowsDeleted} raw rate samples in ${batches} batch(es)`,
     rowsDeleted,
     batches,
-    cutoff: cutoffDate.toISOString(),
-    day: todayUtc,
+    complete,
+    cutoff,
+    retentionDays,
+    day,
   });
 
-  return {
-    status: "completed",
-    day: todayUtc,
-    cutoff: cutoffDate.toISOString(),
-    rowsDeleted,
-    batches,
-    unsummarizedDaysSkipped,
-    unsummarizedSkipped,
-  };
-}
-
-export interface CollectorStepResult {
-  readonly collected?: number;
-  readonly message?: string;
-  readonly [key: string]: unknown;
-}
-
-export type CollectorStepFn = () =>
-  Promise<CollectorStepResult | void> | CollectorStepResult | void;
-
-export interface CollectorStep {
-  readonly name: string;
-  readonly run: CollectorStepFn;
+  return { day, cutoff, retentionDays, rowsDeleted, batches, complete, blocked };
 }
 
 export interface RatePruningStepOptions extends RatePruningOptions {
-  /** Optional custom step name. Default "rate_history_pruning". */
-  readonly stepName?: string;
+  /** Step name in the loop's logs and results. Default "rate_pruning". */
+  readonly name?: string;
 }
 
 /**
- * Creates a CollectorStep suitable for registration with RateCollectorLoop.
- * Guarantees in-memory caching so the step executes at most once per UTC day,
- * without querying the database on every collector tick.
+ * A `RateCollectorLoop` step that prunes once per UTC day. The first tick of a day runs
+ * `pruneRateSamples`; later ticks that day return `{ skipped: true }` without touching the
+ * database. A run that fails, or stops at `maxBatches` with rows left, is retried on the next
+ * tick. A restart prunes again on its first tick, which deletes only what is still eligible.
+ * The options are checked here, so a bad retention fails at startup, not on the first tick.
  */
 export function createPruningCollectorStep(
   db: Queryable,
   options: RatePruningStepOptions = {},
 ): CollectorStep {
-  let inMemoryLastDayUtc: string | null = null;
-  const stepName = options.stepName ?? "rate_history_pruning";
+  resolveOptions(options);
+  const name = options.name ?? "rate_pruning";
+  let prunedDay: string | null = null;
 
   return {
-    name: stepName,
+    name,
     run: async (): Promise<CollectorStepResult> => {
-      const nowVal = options.now ? options.now() : Date.now();
-      const currentDayUtc = utcDayString(nowVal);
-
-      // In-memory quick check avoids DB query on 95 out of 96 ticks in a 15-min schedule
-      if (!options.force && inMemoryLastDayUtc === currentDayUtc) {
-        return {
-          skipped: true,
-          reason: "already_run_today",
-          day: currentDayUtc,
-        };
+      const day = utcDayString(nowMs(options.now));
+      if (prunedDay === day) {
+        return { skipped: true, day, message: `already pruned for ${day}` };
       }
-
-      const res = await pruneRateSamples(db, options);
-      if (res.status === "completed" || res.status === "skipped_already_run_today") {
-        inMemoryLastDayUtc = currentDayUtc;
-      }
-
+      const result = await pruneRateSamples(db, options);
+      if (result.complete) prunedDay = day;
       return {
-        ...res,
-        collected: res.rowsDeleted,
+        pruned: result.rowsDeleted,
+        batches: result.batches,
+        complete: result.complete,
+        cutoff: result.cutoff,
+        blocked: result.blocked.length,
+        message: `pruned ${result.rowsDeleted} raw samples before ${result.cutoff}${
+          result.complete ? "" : " (more remain; continuing next tick)"
+        }${result.blocked.length > 0 ? `; kept ${result.blocked.length} unsummarised series-days` : ""}`,
       };
     },
   };

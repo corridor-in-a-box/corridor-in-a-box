@@ -7,6 +7,22 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
+### Added — rate history retention and daily pruning ([#599](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/599))
+
+- `createPruningCollectorStep()` in `@corridor/engine` is a `RateCollectorLoop` step that, once
+  per UTC day, deletes raw `rate_samples` older than the retention period, oldest first, in
+  batches (1,000 rows, at most 100 batches a run; a larger backlog continues on the next tick).
+  `pruneRateSamples()` runs one pass directly.
+- Retention is `RATE_RETENTION_DAYS` whole UTC days (default 90). Values below 7 are refused,
+  because the minimum-data rule and the 7-day estimate window read raw samples.
+- The guard is part of the `DELETE`: a sample goes only when its series has a
+  `rate_daily_summaries` row for its UTC day, computed after the sample was recorded. Days
+  without one are kept and logged (`corridor.rate_pruning.unsummarized_days_skipped`). Daily
+  summaries are never deleted.
+- `pnpm rate:collector` (`examples/run-rate-collector.ts`) registers the step. Pruning adds no
+  table; the collector's database role needs `delete` on `rate_samples` (`docs/operations.md`).
+  `docs/rate-history.md` now states the retention.
+
 ### Added — Fall back to the next route before funds move ([#626](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/626))
 
 - When the primary route fails before any funds move (a refused quote, a KYC rejection, or a
@@ -573,14 +589,6 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 - `/sep6/withdraw-exchange` rejects USDC with HTTP 400 and the transaction's `more_info_url`
   is the SEP-24 reference UI, whose business-server calls return 401 for the SEP-6 token.
   No `proof:` block was added, because no payout completed.
-
-### Added — Rate history retention and daily pruning ([#599](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/599))
-
-- Added rate history retention and batched daily pruning in `@corridor/engine` (`pruneRateSamples`, `createPruningCollectorStep`).
-- Added configurable retention period `RATE_RETENTION_DAYS` (default 90 days), rejecting invalid values (zero, negative, non-numeric).
-- Enforced strict summary guard in SQL query: raw samples are never deleted for any UTC day lacking a summary row in `rate_daily` matching pair, source, and network.
-- Pruning runs once per day inside the collector loop (`RateCollectorLoop`), with in-memory caching and durable `rate_pruning_state` tracking across restarts.
-
 
 ### Fixed — stale documentation and comments
 
