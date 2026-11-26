@@ -1,0 +1,152 @@
+{
+  "_links": {
+    "self": {
+      "href": "https://horizon.stellar.org/trade_aggregations?base_asset_type=credit_alphanum4\u0026base_asset_code=ZARZ\u0026base_asset_issuer=GAROH4EV3WVVTRQKEY43GZK3XSRBEYETRVZ7SVG5LHWOAANSMCTJBB3U\u0026counter_asset_type=credit_alphanum4\u0026counter_asset_code=USDC\u0026counter_asset_issuer=GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN\u0026resolution=900000\u0026start_time=1795530600000\u0026end_time=1795620600000\u0026order=asc\u0026limit=5"
+    },
+    "next": {
+      "href": "https://horizon.stellar.org/trade_aggregations?base_asset_code=ZARZ\u0026base_asset_issuer=GAROH4EV3WVVTRQKEY43GZK3XSRBEYETRVZ7SVG5LHWOAANSMCTJBB3U\u0026base_asset_type=credit_alphanum4\u0026counter_asset_code=USDC\u0026counter_asset_issuer=GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN\u0026counter_asset_type=credit_alphanum4\u0026end_time=1795620600000\u0026limit=5\u0026order=asc\u0026resolution=900000\u0026start_time=1795535100000"
+    },
+    "prev": {
+      "href": ""
+    }
+  },
+  "_embedded": {
+    "records": [
+      {
+        "timestamp": "1795530600000",
+        "trade_count": "5",
+        "base_volume": "42.1367720",
+        "counter_volume": "2.4000074",
+        "avg": "0.0569576",
+        "high": "0.0569578",
+        "high_r": {
+          "n": "422",
+          "d": "7409"
+        },
+        "low": "0.0567893",
+        "low_r": {
+          "n": "7889",
+          "d": "138917"
+        },
+        "open": "0.0569578",
+        "open_r": {
+          "n": "422",
+          "d": "7409"
+        },
+        "close": "0.0567893",
+        "close_r": {
+          "n": "7889",
+          "d": "138917"
+        }
+      },
+      {
+        "timestamp": "1795531500000",
+        "trade_count": "2",
+        "base_volume": "0.0429006",
+        "counter_volume": "0.0024416",
+        "avg": "0.0569130",
+        "high": "0.0569155",
+        "high_r": {
+          "n": "1981",
+          "d": "34806"
+        },
+        "low": "0.0569155",
+        "low_r": {
+          "n": "1981",
+          "d": "34806"
+        },
+        "open": "0.0569155",
+        "open_r": {
+          "n": "1981",
+          "d": "34806"
+        },
+        "close": "0.0569155",
+        "close_r": {
+          "n": "1981",
+          "d": "34806"
+        }
+      },
+      {
+        "timestamp": "1795532400000",
+        "trade_count": "29",
+        "base_volume": "239.4616334",
+        "counter_volume": "13.6308981",
+        "avg": "0.0569231",
+        "high": "0.0569266",
+        "high_r": {
+          "n": "1008",
+          "d": "17707"
+        },
+        "low": "0.0569201",
+        "low_r": {
+          "n": "1117",
+          "d": "19624"
+        },
+        "open": "0.0569201",
+        "open_r": {
+          "n": "1117",
+          "d": "19624"
+        },
+        "close": "0.0569266",
+        "close_r": {
+          "n": "549",
+          "d": "9644"
+        }
+      },
+      {
+        "timestamp": "1795533300000",
+        "trade_count": "31",
+        "base_volume": "268.7973725",
+        "counter_volume": "15.3032155",
+        "avg": "0.0569322",
+        "high": "0.0569401",
+        "high_r": {
+          "n": "1019",
+          "d": "17896"
+        },
+        "low": "0.0569278",
+        "low_r": {
+          "n": "5089",
+          "d": "89394"
+        },
+        "open": "0.0569278",
+        "open_r": {
+          "n": "5089",
+          "d": "89394"
+        },
+        "close": "0.0569306",
+        "close_r": {
+          "n": "7547",
+          "d": "132565"
+        }
+      },
+      {
+        "timestamp": "1795534200000",
+        "trade_count": "1",
+        "base_volume": "0.0253840",
+        "counter_volume": "0.0014432",
+        "avg": "0.0568547",
+        "high": "0.0568574",
+        "high_r": {
+          "n": "4741",
+          "d": "83384"
+        },
+        "low": "0.0568574",
+        "low_r": {
+          "n": "4741",
+          "d": "83384"
+        },
+        "open": "0.0568574",
+        "open_r": {
+          "n": "4741",
+          "d": "83384"
+        },
+        "close": "0.0568574",
+        "close_r": {
+          "n": "4741",
+          "d": "83384"
+        }
+      }
+    ]
+  }
+}

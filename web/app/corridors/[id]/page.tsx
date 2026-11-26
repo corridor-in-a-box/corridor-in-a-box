@@ -4,7 +4,7 @@ import type { Metadata } from "next";
 import { AlertTriangle, ArrowLeft, ArrowRight, Link2 } from "lucide-react";
 import { AnchorCard } from "@/components/AnchorCard";
 import { LivenessBadge } from "@/components/LivenessBadge";
-import { RateHistoryChart } from "@/components/RateHistoryChart";
+import { NoRegistry } from "@/components/NoRegistry";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import {
@@ -15,8 +15,8 @@ import {
   endpoint,
   type EndpointKey,
 } from "@/lib/corridors";
+import { NETWORK_LABEL } from "@/lib/network";
 import { fetchAttestations, REGISTRY_ID, REGISTRY_NETWORK } from "@/lib/registry";
-import { getDailySummaryData } from "@/lib/rates";
 
 // Anchor facts come from the chain, and attestations change on the order of
 // hours. Read them at request time and revalidate hourly — baking a build-time
@@ -59,7 +59,6 @@ export default async function CorridorPage({ params }: { params: Promise<{ id: s
 
   const live = liveness(corridor);
   const attestations = await fetchAttestations();
-  const dailySummary = getDailySummaryData();
   const domain = corridor.dest.endpoints.home_domain;
   const attestation = attestations.anchors.find((a) => a.domain === domain);
 
@@ -232,11 +231,14 @@ export default async function CorridorPage({ params }: { params: Promise<{ id: s
         </div>
         <p className="text-sm text-secondary-text">
           Attestation for the destination anchor&apos;s home domain,{" "}
-          <span className="font-mono">{domain}</span>. This is the only section sourced from
-          the chain; everything above is what the manifest claims.
+          <span className="font-mono">{domain}</span>, read from the{" "}
+          {NETWORK_LABEL[REGISTRY_NETWORK]} registry. This is the only section sourced from the
+          chain; everything above is what the manifest claims.
         </p>
 
-        {!attestations.ok ? (
+        {!attestations.deployed ? (
+          <NoRegistry network={REGISTRY_NETWORK} />
+        ) : !attestations.ok ? (
           <div className="rounded-xl border border-border bg-bg-subtle p-5 text-sm text-secondary-text">
             <div className="mb-1 font-medium text-primary-text">Registry unreachable</div>
             Could not read the registry ({attestations.error}). This is not the same as
@@ -245,7 +247,7 @@ export default async function CorridorPage({ params }: { params: Promise<{ id: s
           </div>
         ) : attestation ? (
           <div className="grid gap-4 md:grid-cols-2">
-            <AnchorCard anchor={attestation} />
+            <AnchorCard anchor={attestation} network={REGISTRY_NETWORK} />
           </div>
         ) : (
           <div className="rounded-xl border border-border bg-bg-subtle p-5 text-sm text-secondary-text">
@@ -256,15 +258,6 @@ export default async function CorridorPage({ params }: { params: Promise<{ id: s
           </div>
         )}
       </section>
-
-      {/* Rate History per Currency Pair */}
-      <section className="flex flex-col gap-4">
-        <SectionHeading title="Rate history & stability" source="daily summary" />
-        <RateHistoryChart
-          initialData={dailySummary.pairs}
-          preselectedPair={`${corridor.source.asset}/${corridor.dest.asset}`}
-        />
-      </section>
     </div>
   );
 }
@@ -274,14 +267,12 @@ function SectionHeading({
   source,
 }: {
   title: string;
-  source: "manifest" | "on-chain registry" | "daily summary";
+  source: "manifest" | "on-chain registry";
 }) {
   return (
     <div className="flex items-center gap-3">
       <h2 className="text-xl font-semibold">{title}</h2>
-      <Badge variant={source === "manifest" ? "default" : "info"}>
-        {source}
-      </Badge>
+      <Badge variant={source === "manifest" ? "default" : "info"}>{source}</Badge>
     </div>
   );
 }

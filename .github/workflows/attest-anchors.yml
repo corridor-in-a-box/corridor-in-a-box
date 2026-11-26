@@ -45,7 +45,7 @@ jobs:
       STELLAR_NETWORK: ${{ vars.STELLAR_NETWORK || 'testnet' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
@@ -90,8 +90,18 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      - name: Submit attestations
+      # Fails the run in one line when the deployed registry or attester is behind
+      # main (#584). When attesting would fail per anchor (a bit the registry does
+      # not know) it also stops the submit step; when only functions `pnpm attest`
+      # already skips are missing, the writes that can land still go through and
+      # the run stays red until an admin runs `pnpm upgrade:registry`.
+      - name: Preflight registry contract
+        id: preflight
         if: ${{ env.ATTESTER_SECRET != '' }}
+        run: pnpm preflight:registry
+
+      - name: Submit attestations
+        if: ${{ env.ATTESTER_SECRET != '' && (success() || steps.preflight.outputs.blocking == 'false') }}
         run: pnpm attest --from sweep/sweep.json
 
       # Unset secret on a MANUAL run is a fair state — someone is exercising the

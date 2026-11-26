@@ -5,6 +5,7 @@
 
 import type { Corridor } from "@corridor/manifest";
 import {
+  compareAmounts,
   fail,
   ok,
   type Outcome,
@@ -30,15 +31,35 @@ import {
 } from "./ports";
 import type { Logger, Metrics } from "./observability";
 
-// 1. QUOTE — SEP-38. Get a price and verify the firm-quote window hasn't already
-//    closed. who_holds_risk in the manifest records who eats slippage if it does.
+// 1. QUOTE — SEP-38. Get a price (or validate a caller-supplied quote without
+//    re-quoting) and verify the firm-quote window hasn't already closed.
+//    who_holds_risk in the manifest records who eats slippage if it does.
 export async function quote(
   adapter: AnchorAdapter,
   intent: PaymentIntent,
   corridor: Corridor,
   now: number,
   provider?: QuoteProvider,
+  suppliedQuote?: Quote,
 ): Promise<Outcome<Quote>> {
+  if (suppliedQuote !== undefined) {
+    const problem = suppliedQuoteProblem(suppliedQuote, intent);
+    if (problem) {
+      return fail(
+        "QUOTE_UNAVAILABLE",
+        `supplied quote ${String(suppliedQuote.id)} ${problem}; refusing to re-quote`,
+        { retryable: false },
+      );
+    }
+    if (suppliedQuote.firm && suppliedQuote.expiresAt <= now) {
+      return fail(
+        "QUOTE_EXPIRED",
+        `supplied locked quote ${suppliedQuote.id} expired before use; refusing to re-quote`,
+        { retryable: false },
+      );
+    }
+    return ok(suppliedQuote);
+  }
   const q = provider
     ? await provider.quote(intent, corridor)
     : await adapter.requestQuote(intent, corridor);
@@ -49,6 +70,39 @@ export async function quote(
     });
   }
   return q;
+}
+
+/** Prices and dest amounts are anchor-reported and may carry more places than a stroop. */
+const PRICE_SCALE = 18;
+
+/**
+ * Why a caller-supplied quote cannot be used for this intent, or undefined when it can.
+ *
+ * Settlement sends `quote.sourceAmount`, while the corridor limits and the canary
+ * cap were checked against `intent.sourceAmount`, so a quote for another asset or
+ * amount would move a different sum than the one that was approved (#622).
+ */
+function suppliedQuoteProblem(q: Quote, intent: PaymentIntent): string | undefined {
+  if (typeof q.id !== "string" || q.id.length === 0) return "has no id";
+  if (typeof q.firm !== "boolean") return "has no firm flag";
+  if (!Number.isFinite(q.expiresAt)) return "has no valid expiresAt";
+  if (typeof q.price !== "string" || !isSettleableAmount(q.price, PRICE_SCALE)) {
+    return "has no positive price";
+  }
+  if (q.sourceAmount?.asset !== intent.sourceAmount.asset) {
+    return `is for source asset ${String(q.sourceAmount?.asset)}, not ${intent.sourceAmount.asset}`;
+  }
+  const same = compareAmounts(q.sourceAmount.amount, intent.sourceAmount.amount);
+  if (!same.ok || same.value !== 0) {
+    return `is for source amount ${String(q.sourceAmount.amount)}, not ${intent.sourceAmount.amount}`;
+  }
+  if (
+    typeof q.destAmount?.asset !== "string" ||
+    !isSettleableAmount(q.destAmount.amount, PRICE_SCALE)
+  ) {
+    return "has no positive destAmount";
+  }
+  return undefined;
 }
 
 // 2. COMPLY — SEP-10 auth + SEP-12 KYC handoff. Reject hard on rejection.

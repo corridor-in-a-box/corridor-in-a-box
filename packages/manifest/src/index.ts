@@ -55,6 +55,15 @@ const AnchorBaseSchema = z.object({
   /** Asset this anchor deals in at this leg. Source side: typically "USDC".
    *  Dest side: the off-chain payout asset, e.g. "iso4217:ARS". */
   asset: z.string().min(1),
+  /**
+   * Destination country, ISO 3166-1 alpha-2 (e.g. "NG"). Optional so existing
+   * manifests are unchanged and hashes stay stable; the planner falls back to
+   * `compliance.dest_jurisdiction` when it is absent.
+   */
+  country: z
+    .string()
+    .regex(/^[A-Z]{2}$/, "expected ISO 3166-1 alpha-2 country code")
+    .optional(),
 });
 
 export const AnchorSchema = AnchorBaseSchema.extend({ endpoints: AnchorEndpointsSchema });
@@ -88,6 +97,57 @@ const CustomDestSchema = AnchorBaseSchema.extend({
   }),
 });
 
+/**
+ * Direct Stellar wallet delivery (`protocol: wallet`): sends on-chain directly
+ * to the recipient's Stellar wallet without a receiving anchor API. The
+ * corridor declares the delivered `asset` and `settlement.network`; each
+ * `PaymentIntent` supplies the recipient `wallet` (`account` and optional `memo`).
+ */
+const WalletEndpointsSchema = z.object({
+  home_domain: z.string().min(1),
+  endpoints_verified_at: AnchorEndpointsSchema.shape.endpoints_verified_at,
+});
+
+export const WalletDestSchema = AnchorBaseSchema.extend({
+  protocol: z.literal("wallet"),
+  /** Optional Stellar issuer account when `asset` is not native XLM. */
+  asset_issuer: z.string().min(1).optional(),
+  endpoints: WalletEndpointsSchema,
+});
+
+/** Schema for the per-payment wallet fields supplied on a `PaymentIntent`. */
+export const WalletDestinationSchema = z
+  .object({
+    account: z.string().regex(/^G[A-Z2-7]{55}$/, "expected a valid Stellar G... public key"),
+    memo: z.string().min(1).optional(),
+    memoType: z.enum(["text", "hash", "id"]).optional(),
+  })
+  .superRefine((w, ctx) => {
+    if (w.memoType !== undefined && w.memo === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["memo"],
+        message: "memo is required when memoType is set",
+      });
+    }
+    if (w.memo !== undefined && (w.memoType ?? "text") === "text") {
+      if (Buffer.byteLength(w.memo, "utf8") > 28) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["memo"],
+          message: "Stellar text memo must be at most 28 UTF-8 bytes",
+        });
+      }
+    }
+    if (w.memo !== undefined && w.memoType === "id" && !/^\d+$/.test(w.memo)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["memo"],
+        message: 'Stellar "id" memo must be an unsigned 64-bit integer string',
+      });
+    }
+  });
+
 // A discriminated union discriminates before defaults apply, so default an
 // absent `protocol` to "sep31" first (existing manifests unchanged), the same
 // way SourceAnchorSchema defaults to "prefunded".
@@ -96,7 +156,9 @@ export const DestSchema = z.preprocess(
     raw && typeof raw === "object" && !Array.isArray(raw) && !("protocol" in raw)
       ? { ...raw, protocol: "sep31" }
       : raw,
-  z.discriminatedUnion("protocol", [Sep31DestSchema, Sep6DestSchema]).or(CustomDestSchema),
+  z
+    .discriminatedUnion("protocol", [Sep31DestSchema, Sep6DestSchema, WalletDestSchema])
+    .or(CustomDestSchema),
 );
 
 /**
@@ -429,11 +491,12 @@ export function complianceMethod(corridor: Corridor): ComplianceMethod {
 }
 
 export type Corridor = z.infer<typeof CorridorSchema>;
-export type DestProtocol = "sep31" | "sep6" | `custom:${string}`;
+export type DestProtocol = "sep31" | "sep6" | "wallet" | `custom:${string}`;
 export type Sep31Anchor = z.infer<typeof Sep31DestSchema>;
 export type Sep6Anchor = z.infer<typeof Sep6DestSchema>;
+export type WalletAnchor = z.infer<typeof WalletDestSchema>;
 export type CustomAnchor = z.infer<typeof CustomDestSchema>;
-export type AnchorConfig = Sep31Anchor | Sep6Anchor | CustomAnchor;
+export type AnchorConfig = Sep31Anchor | Sep6Anchor | WalletAnchor | CustomAnchor;
 
 export function protocolOf(anchor: z.infer<typeof DestSchema>): DestProtocol {
   return anchor.protocol as DestProtocol;

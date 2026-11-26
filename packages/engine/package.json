@@ -43,6 +43,7 @@
     "@corridor/types": "workspace:*",
     "@corridor/manifest": "workspace:*",
     "@corridor/adapter-kit": "workspace:*",
-    "@corridor/router": "workspace:*"
+    "@corridor/router": "workspace:*",
+    "@corridor/probe": "workspace:*"
   }
 }

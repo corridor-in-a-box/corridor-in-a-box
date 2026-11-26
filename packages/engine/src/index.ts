@@ -40,11 +40,65 @@ export {
   type RecordOutcomeOptions,
 } from "./breaker";
 export { PostgresAuditSink, CREATE_AUDIT_TABLE_SQL } from "./audit-pg";
+export { routeChoiceFor, ROUTE_CHOICE_TOP_N } from "./route-choice";
 export {
   PostgresCorridorHealthStore,
   CREATE_BREAKERS_TABLE_SQL,
   BREAKERS_MIGRATION_SQL,
 } from "./breaker-pg";
+export {
+  CREATE_RATE_SAMPLES_TABLE_SQL,
+  RATE_SAMPLES_INDEX_SQL,
+  CREATE_RATE_DAILY_SUMMARIES_TABLE_SQL,
+  RATE_DAILY_SUMMARIES_INDEX_SQL,
+  RATE_HISTORY_MIGRATION_SQL,
+  RATE_SAMPLE_SOURCES,
+  ANCHOR_RATE_SOURCES,
+  RATE_NETWORKS,
+  PostgresRateHistoryStore,
+  assertRateSample,
+  isSep38AssetId,
+  assertRateDailySummary,
+  type RateSeries,
+  type RateNetwork,
+  type RateSampleInput,
+  type RateSampleRecord,
+  type RateSampleSource,
+  type ListRateSamplesFilter,
+  type RateDailySummary,
+  type RateDailySummaryRecord,
+  type ListRateDailySummariesFilter,
+} from "./rate-samples-pg";
+export {
+  checkOutlier,
+  flagOutliers,
+  medianRate,
+  DEFAULT_OUTLIER_THRESHOLD_BPS,
+  DEFAULT_OUTLIER_WINDOW,
+  DEFAULT_OUTLIER_MIN_BASELINE,
+  type OutlierPolicy,
+  type OutlierVerdict,
+} from "./rate-outliers";
+export {
+  DEX_TRADE_RESOLUTION_15M,
+  HORIZON_MAX_LIMIT,
+  assertDexPair,
+  buildTradeAggregationsUrl,
+  collectDexTrades,
+  collectDexTradesForPair,
+  defaultHorizonUrl,
+  fetchTradeAggregations,
+  horizonAssetParams,
+  loadDexPairsConfig,
+  parseDexPairsConfig,
+  tradeAggregationsToSamples,
+  type CollectDexTradesOptions,
+  type DexPairConfig,
+  type DexPairResult,
+  type HorizonTradeAggregationRecord,
+  type HorizonTradeAggregationsResponse,
+  type RateSampleSink,
+} from "./rate-collector-dex";
 export {
   UnimplementedSubmitter,
   createMockSubmitter,
@@ -109,6 +163,8 @@ export {
   type AuditSink,
   type AuditEntry,
   type AuditDetail,
+  type RouteChoice,
+  type RouteChoiceOption,
   type Alert,
   type AlertKind,
   type Alerting,
@@ -123,3 +179,22 @@ export {
   ExternalQuoteProvider,
 } from "@corridor/adapter-kit";
 export { checkCompatibility } from "./compat";
+export {
+  DEFAULT_SEP38_REFERENCE_AMOUNT,
+  DEFAULT_SEP38_TIMEOUT_MS,
+  DEFAULT_SEP38_MAX_STALENESS_LEDGERS,
+  pollSep38Prices,
+  findSep38Anchors,
+  resolveSep38QuoteServer,
+  stellarAssetsFromInfo,
+  buyAssetsFromPrices,
+  type Sep38AttestationSource,
+  type RateSampleRecorder,
+  type Sep38PollTarget,
+  type PollSep38PricesOptions,
+  type Sep38PairOutcome,
+  type Sep38AnchorOutcome,
+  type Sep38SkippedAnchor,
+  type Sep38PollResult,
+  type Sep38TomlEndpoints,
+} from "./rate-collector-sep38";
