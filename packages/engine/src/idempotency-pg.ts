@@ -20,6 +20,8 @@ import type { CorridorState } from "./state";
 import { CREATE_BREAKERS_TABLE_SQL, BREAKERS_MIGRATION_SQL } from "./breaker-pg";
 // Same arrangement for the audit table: audit-pg imports only types from here.
 import { CREATE_AUDIT_TABLE_SQL } from "./audit-pg";
+// And for rate history (RFC 0004 §3, #589): rate-samples-pg imports only types from here.
+import { RATE_HISTORY_MIGRATION_SQL } from "./rate-samples-pg";
 
 export interface QueryResult<R = Record<string, unknown>> {
   rows: R[];
@@ -45,6 +47,9 @@ create table if not exists corridor_runs (
   quote_id        text,
   quote_expires_at bigint,
   quote_firm      boolean,
+  receiving_domain text,
+  route_protocol  text,
+  price_label     text,
   settlement_amount text,
   stellar_tx_hash text,
   settlement_kind text,
@@ -56,6 +61,7 @@ create table if not exists corridor_runs (
   last_error      text,
   owner           text,
   settlement      text,
+  estimate_gap    text,
   updated_at      timestamptz not null default now()
 );
 `;
@@ -95,6 +101,12 @@ const ALTER_TABLE_SQL = [
   // Settlement kind and reference for off-chain / adapter-settled transactions (#186).
   `alter table corridor_runs add column if not exists settlement_kind text;`,
   `alter table corridor_runs add column if not exists settlement_ref text;`,
+  // Pinned route fields chosen at route resolution / quoting (#624).
+  `alter table corridor_runs add column if not exists receiving_domain text;`,
+  `alter table corridor_runs add column if not exists route_protocol text;`,
+  `alter table corridor_runs add column if not exists price_label text;`,
+  // Estimate gap when a business guarantees estimated prices (#627).
+  `alter table corridor_runs add column if not exists estimate_gap text;`,
 ];
 
 export async function migrate(db: Queryable): Promise<void> {
@@ -104,6 +116,8 @@ export async function migrate(db: Queryable): Promise<void> {
   // The append-only audit trail (audit-pg.ts) ships from the same entry point,
   // so a deployment cannot end up with runs but no audit table.
   await db.query(CREATE_AUDIT_TABLE_SQL);
+  // Rate history (RFC 0004 §3, #589): raw samples and their daily summaries.
+  for (const sql of RATE_HISTORY_MIGRATION_SQL) await db.query(sql);
   // The circuit-breaker table ships from the same entry point on purpose. It is
   // one more `create table if not exists`, so a deployment that has not run
   // migrate() since upgrading would get breaker errors on every payment — the
@@ -126,6 +140,9 @@ interface Row {
   quote_id: string | null;
   quote_expires_at: number | string | null;
   quote_firm: boolean | null;
+  receiving_domain: string | null;
+  route_protocol: string | null;
+  price_label: string | null;
   settlement_amount: string | null;
   stellar_tx_hash: string | null;
   settlement_kind: string | null;
@@ -137,6 +154,7 @@ interface Row {
   last_error: string | null;
   owner: string | null;
   settlement: string | null;
+  estimate_gap: string | null;
 }
 
 function toRun(r: Row): StoredRun {
@@ -170,6 +188,9 @@ function toRun(r: Row): StoredRun {
     quoteId: r.quote_id ?? undefined,
     quoteExpiresAt: r.quote_expires_at == null ? undefined : Number(r.quote_expires_at),
     quoteFirm: r.quote_firm ?? undefined,
+    receivingDomain: r.receiving_domain ?? undefined,
+    routeProtocol: r.route_protocol ?? undefined,
+    priceLabel: (r.price_label as StoredRun["priceLabel"]) ?? undefined,
     settlementAmount: r.settlement_amount ?? undefined,
     stellarTxHash: r.stellar_tx_hash ?? undefined,
     settlementKind,
@@ -181,6 +202,7 @@ function toRun(r: Row): StoredRun {
     lastError: r.last_error ?? undefined,
     owner: r.owner ?? undefined,
     settlement: r.settlement ? JSON.parse(r.settlement) : undefined,
+    estimateGap: r.estimate_gap ?? undefined,
   };
 }
 
@@ -210,8 +232,9 @@ export class PostgresIdempotencyStore implements IdempotencyStore {
          (idempotency_key, corridor_id, state, version, transaction_id, source_transaction_id,
           quote_id, quote_expires_at, quote_firm, settlement_amount,
           stellar_tx_hash, settlement_kind, settlement_ref, deposit_address, memo, memo_type,
-          refund_id, last_error, owner, settlement, manifest_hash, updated_at)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21, now())
+          refund_id, last_error, owner, settlement, manifest_hash,
+          receiving_domain, route_protocol, price_label, estimate_gap, updated_at)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25, now())
        on conflict (idempotency_key) do nothing
        returning idempotency_key`,
       [
@@ -236,6 +259,10 @@ export class PostgresIdempotencyStore implements IdempotencyStore {
         run.owner ?? null,
         run.settlement ? JSON.stringify(run.settlement) : null,
         run.manifestHash ?? null,
+        run.receivingDomain ?? null,
+        run.routeProtocol ?? null,
+        run.priceLabel ?? null,
+        run.estimateGap ?? null,
       ],
     );
     return res.rows.length > 0;
@@ -246,7 +273,8 @@ export class PostgresIdempotencyStore implements IdempotencyStore {
       `select idempotency_key, corridor_id, state, version, transaction_id, source_transaction_id,
               quote_id, quote_expires_at, quote_firm, settlement_amount,
               stellar_tx_hash, settlement_kind, settlement_ref, deposit_address, memo, memo_type,
-              refund_id, last_error, owner, settlement, manifest_hash
+              refund_id, last_error, owner, settlement, manifest_hash,
+              receiving_domain, route_protocol, price_label, estimate_gap
          from corridor_runs where idempotency_key = $1`,
       [key],
     );
@@ -266,7 +294,8 @@ export class PostgresIdempotencyStore implements IdempotencyStore {
     const limitParam = `$${params.length}`;
     const result = await this.db.query<Row>(
       `select idempotency_key, corridor_id, state, version, transaction_id, source_transaction_id,
-              quote_id, stellar_tx_hash, settlement_kind, settlement_ref, refund_id, last_error, owner, manifest_hash
+              quote_id, stellar_tx_hash, settlement_kind, settlement_ref, refund_id, last_error, owner, manifest_hash,
+              receiving_domain, route_protocol, price_label, estimate_gap
          from corridor_runs where state = $1 ${corridor}
         order by updated_at desc, idempotency_key asc limit ${limitParam}`,
       params,
@@ -340,10 +369,14 @@ export class PostgresIdempotencyStore implements IdempotencyStore {
          (idempotency_key, corridor_id, state, version, transaction_id, source_transaction_id,
           quote_id, quote_expires_at, quote_firm, settlement_amount,
           stellar_tx_hash, settlement_kind, settlement_ref, deposit_address, memo, memo_type,
-          refund_id, last_error, owner, settlement, manifest_hash, updated_at)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21, now())
+          refund_id, last_error, owner, settlement, manifest_hash,
+          receiving_domain, route_protocol, price_label, estimate_gap, updated_at)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25, now())
        on conflict (idempotency_key) do update set
          manifest_hash   = coalesce(corridor_runs.manifest_hash, excluded.manifest_hash),
+         receiving_domain = coalesce(corridor_runs.receiving_domain, excluded.receiving_domain),
+         route_protocol  = coalesce(corridor_runs.route_protocol, excluded.route_protocol),
+         price_label     = coalesce(corridor_runs.price_label, excluded.price_label),
          state           = excluded.state,
          version         = excluded.version,
          transaction_id  = excluded.transaction_id,
@@ -361,6 +394,7 @@ export class PostgresIdempotencyStore implements IdempotencyStore {
          refund_id       = coalesce(corridor_runs.refund_id, excluded.refund_id),
          last_error      = excluded.last_error,
          settlement      = coalesce(corridor_runs.settlement, excluded.settlement),
+         estimate_gap    = coalesce(excluded.estimate_gap, corridor_runs.estimate_gap),
          updated_at      = now()
        where corridor_runs.version < excluded.version`,
       [
@@ -385,6 +419,10 @@ export class PostgresIdempotencyStore implements IdempotencyStore {
         run.owner ?? null,
         run.settlement ? JSON.stringify(run.settlement) : null,
         run.manifestHash ?? null,
+        run.receivingDomain ?? null,
+        run.routeProtocol ?? null,
+        run.priceLabel ?? null,
+        run.estimateGap ?? null,
       ],
     );
   }

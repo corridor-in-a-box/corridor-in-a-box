@@ -25,6 +25,17 @@ export { type SettlementRef, settlementId };
 export { Sep10Client, jwtExpiryMs, type Sep10Signer } from "./sep10";
 export { Sep12ComplianceCheck, type Sep12ComplianceCheckOptions } from "./sep12";
 export type { ComplianceMethod };
+export {
+  createExporterRegistry,
+  type BusinessAddress,
+  type BusinessContact,
+  type BusinessProfile,
+  type ExporterError,
+  type ExporterErrorCode,
+  type ExporterRegistry,
+  type OnboardingExporter,
+  type ReceiverForm,
+} from "./onboarding";
 
 /** A SEP-38 quote. `firm` quotes carry an id + expiry and bind the deliverer to a rate. */
 export interface Quote {
@@ -96,6 +107,7 @@ export interface OpenTransaction {
   readonly transactionId: string;
   readonly instructions: DepositInstructions;
   readonly amountIn?: Money;
+  readonly amountOut?: Money;
   /**
    * @deprecated Read from `instructions` instead. Retained for single-release compatibility.
    */
@@ -274,6 +286,7 @@ export interface TransactionStatus {
    * all undefined.
    */
   readonly amountIn?: Money;
+  readonly amountOut?: Money;
   readonly depositAddress?: string;
   readonly memo?: string;
   readonly memoType?: "text" | "hash" | "id";
@@ -791,6 +804,8 @@ export interface MockAdapterOptions {
   confirmSettlementResult?: Outcome<SettlementRef>;
   /** Deposit instructions for openTransaction to report. */
   instructions?: DepositInstructions;
+  /** Actual payout amount for openTransaction and getTransaction to report on amountOut. */
+  amountOut?: Money;
 }
 
 export function createMockAdapter(opts: MockAdapterOptions = {}): AnchorAdapter {
@@ -843,6 +858,7 @@ export function createMockAdapter(opts: MockAdapterOptions = {}): AnchorAdapter 
         transactionId: `tx_${++counter}`,
         instructions,
         amountIn: quote.sourceAmount,
+        ...(opts.amountOut ? { amountOut: opts.amountOut } : {}),
         depositAddress: instructions.kind === "stellar_payment" ? instructions.to : undefined,
         memo: instructions.kind === "stellar_payment" ? instructions.memo : undefined,
       };
@@ -862,6 +878,7 @@ export function createMockAdapter(opts: MockAdapterOptions = {}): AnchorAdapter 
           settled: false,
           terminalFailure: true,
           refunds: opts.refundStatus,
+          ...(opts.amountOut ? { amountOut: opts.amountOut } : {}),
           ...expected,
         });
       }
@@ -869,6 +886,7 @@ export function createMockAdapter(opts: MockAdapterOptions = {}): AnchorAdapter 
         status: opts.settled === false ? "pending_receiver" : "completed",
         settled: opts.settled !== false,
         refunds: opts.refundStatus,
+        ...(opts.amountOut ? { amountOut: opts.amountOut } : {}),
         ...expected,
       });
     },

@@ -14,20 +14,35 @@ import {
   type ServerResponse,
 } from "node:http";
 import * as crypto from "node:crypto";
-import { liveness, type Corridor } from "@corridor/manifest";
-import { execute, type EngineDeps } from "@corridor/engine";
+import type { Corridor } from "@corridor/manifest";
+import { execute, type EngineDeps, type ExecuteOptions } from "@corridor/engine";
 import {
-  compareAmounts,
   constantTimeEqual,
   err,
   isSettleableAmount,
   ok,
   type CorridorErrorCode,
-  type Money,
   type Outcome,
   type PartyRef,
   type PaymentIntent,
 } from "@corridor/types";
+import {
+  parseChosenRouteOption,
+  signRouteOption,
+  verifyRouteOption,
+  type ChosenRouteOption,
+  type ChosenRouteOptionPayload,
+  type ChosenRouteOptionQuote,
+  type RouteOptionRejection,
+} from "./route-option";
+
+export { signRouteOption, verifyRouteOption };
+export type {
+  ChosenRouteOption,
+  ChosenRouteOptionPayload,
+  ChosenRouteOptionQuote,
+  RouteOptionRejection,
+};
 
 export interface RateLimitOptions {
   /** Bucket size (max burst). */
@@ -100,6 +115,11 @@ export interface ServiceOptions {
    * Timeout in milliseconds for each individual readiness check. Default 5000 ms.
    */
   readinessTimeoutMs?: number;
+  /**
+   * HMAC-SHA256 key used to verify signed `routeOption` payloads submitted on
+   * `POST /payments`. Fails closed when omitted and a client submits `routeOption`.
+   */
+  routeOptionSecret?: string;
 }
 
 /** Default cap on a buffered request body. A payment intent is well under 1 KiB. */
@@ -234,6 +254,14 @@ export const STATUS_BY_CODE: Record<CorridorErrorCode, number> = {
   // like CORRIDOR_HALTED: a well-formed request refused because no trusted
   // route is available, not a fault in the caller's input or in this server.
   ROUTE_REFUSED: 503,
+  // Raised by the service before the engine runs. The response status follows the
+  // failed check (400 bad signature, 409 expired, 422 otherwise); 422 is the default.
+  ROUTE_OPTION_INVALID: 422,
+  // A run that has reached settling was resumed against a different receiving
+  // domain than the one it opened with. 409: the run is pinned once settlement
+  // starts, so the re-route is a conflict the caller cannot resolve by retrying
+  // the same key — the stored run is left untouched and resumable. See RFC 0004.
+  ROUTE_PINNED: 409,
 };
 
 /** Token-bucket rate limiter, keyed per client. In-memory; swap for Redis at scale. */
@@ -308,7 +336,12 @@ const PAYMENT_FIELDS = new Set([
   "recipient",
   "sourceAmount",
   "destinationFields",
+  "routeOption",
 ]);
+
+export type ParsedPaymentIntent = PaymentIntent & {
+  routeOption?: ChosenRouteOption;
+};
 
 /** idempotencyKey becomes a Postgres primary key and a log field. Bounded and
  *  charset-checked here the same way the web route bounds it (web/app/api/payments/route.ts):
@@ -377,37 +410,7 @@ function parseParty(
  * error mapping follows): field names and bounds, never upstream URLs or
  * response bodies.
  */
-function parseDestinationFields(
-  df: unknown,
-): Outcome<Record<string, string>, PaymentBodyError> {
-  if (!isPlainObject(df)) {
-    return reject(
-      "destinationFields",
-      "expected a flat object of string values (Record<string,string>)",
-    );
-  }
-  const keys = Object.keys(df);
-  if (keys.length > MAX_DESTINATION_FIELD_KEYS) {
-    return reject("destinationFields", `must have at most ${MAX_DESTINATION_FIELD_KEYS} keys`);
-  }
-  const destinationFields: Record<string, string> = {};
-  for (const key of keys) {
-    const value = df[key];
-    if (typeof value !== "string") {
-      return reject(`destinationFields.${key}`, "expected a string value");
-    }
-    if (value.length > MAX_DESTINATION_FIELD_VALUE) {
-      return reject(
-        `destinationFields.${key}`,
-        `must be at most ${MAX_DESTINATION_FIELD_VALUE} characters`,
-      );
-    }
-    destinationFields[key] = value;
-  }
-  return ok(destinationFields);
-}
-
-export function parsePaymentBody(o: unknown): Outcome<PaymentIntent, PaymentBodyError> {
+export function parsePaymentBody(o: unknown): Outcome<ParsedPaymentIntent, PaymentBodyError> {
   if (!isPlainObject(o)) {
     return reject("<body>", "expected a JSON object");
   }
@@ -456,16 +459,47 @@ export function parsePaymentBody(o: unknown): Outcome<PaymentIntent, PaymentBody
   if (typeof rawSourceAmount.amount !== "string") {
     return reject("sourceAmount.amount", "expected a string");
   }
-  if (rawSourceAmount.amount.length === 0) {
-    return reject("sourceAmount.amount", "must not be empty");
-  }
   const sourceAmount = { asset: rawSourceAmount.asset, amount: rawSourceAmount.amount };
 
   let destinationFields: Record<string, string> | undefined;
   if ("destinationFields" in o && o.destinationFields !== undefined) {
-    const parsedDf = parseDestinationFields(o.destinationFields);
-    if (!parsedDf.ok) return parsedDf;
-    destinationFields = parsedDf.value;
+    const df = o.destinationFields;
+    if (!isPlainObject(df)) {
+      return reject(
+        "destinationFields",
+        "expected a flat object of string values (Record<string,string>)",
+      );
+    }
+    const keys = Object.keys(df);
+    if (keys.length > MAX_DESTINATION_FIELD_KEYS) {
+      return reject(
+        "destinationFields",
+        `must have at most ${MAX_DESTINATION_FIELD_KEYS} keys`,
+      );
+    }
+    destinationFields = {};
+    for (const key of keys) {
+      const value = df[key];
+      if (typeof value !== "string") {
+        return reject(`destinationFields.${key}`, "expected a string value");
+      }
+      if (value.length > MAX_DESTINATION_FIELD_VALUE) {
+        return reject(
+          `destinationFields.${key}`,
+          `must be at most ${MAX_DESTINATION_FIELD_VALUE} characters`,
+        );
+      }
+      destinationFields[key] = value;
+    }
+  }
+
+  let routeOption: ChosenRouteOption | undefined;
+  if (o.routeOption !== undefined) {
+    const parsedOption = parseChosenRouteOption(o.routeOption);
+    if (!parsedOption.ok) {
+      return reject("routeOption", parsedOption.error);
+    }
+    routeOption = parsedOption.value;
   }
 
   return ok({
@@ -475,141 +509,7 @@ export function parsePaymentBody(o: unknown): Outcome<PaymentIntent, PaymentBody
     recipient,
     sourceAmount,
     ...(destinationFields ? { destinationFields } : {}),
-  });
-}
-
-export interface RouteOption {
-  readonly rank: number;
-  readonly corridorId: string;
-  readonly label: "proven" | "verified" | "unverified";
-  readonly runnable: boolean;
-  readonly trust: "attested" | "manifest";
-  readonly protocol: string;
-  readonly sourceAmount: Money;
-  readonly destinationDomain: string;
-  readonly destAsset: string;
-  readonly destJurisdiction?: string;
-  readonly estimatedDestAmount?: string;
-  readonly limits?: {
-    readonly min?: string;
-    readonly max?: string;
-    readonly canaryMax?: string;
-  };
-}
-
-export interface RouteOptions {
-  readonly routes: readonly RouteOption[];
-}
-
-export interface RoutePlanRequest {
-  readonly sourceAmount: Money;
-  readonly destAsset?: string;
-  readonly destJurisdiction?: string;
-  readonly corridorId?: string;
-  readonly sender?: PartyRef;
-  readonly recipient?: PartyRef;
-  readonly destinationFields?: Readonly<Record<string, string>>;
-}
-
-export type RoutesRequest = RoutePlanRequest;
-
-const ROUTE_FIELDS = new Set([
-  "sourceAmount",
-  "destAsset",
-  "destJurisdiction",
-  "corridorId",
-  "sender",
-  "recipient",
-  "destinationFields",
-]);
-
-export function parseRouteBody(o: unknown): Outcome<RoutePlanRequest, PaymentBodyError> {
-  if (!isPlainObject(o)) {
-    return reject("<body>", "expected a JSON object");
-  }
-  for (const key of Object.keys(o)) {
-    if (!ROUTE_FIELDS.has(key)) {
-      return reject(key, "unknown field");
-    }
-  }
-
-  const rawSourceAmount = (o as Record<string, unknown>).sourceAmount;
-  if (!isPlainObject(rawSourceAmount)) {
-    return reject("sourceAmount", "expected an object with asset and amount strings");
-  }
-  if (typeof rawSourceAmount.asset !== "string") {
-    return reject("sourceAmount.asset", "expected a string");
-  }
-  if (rawSourceAmount.asset.length === 0) {
-    return reject("sourceAmount.asset", "must not be empty");
-  }
-  if (typeof rawSourceAmount.amount !== "string") {
-    return reject("sourceAmount.amount", "expected a string");
-  }
-  if (rawSourceAmount.amount.length === 0) {
-    return reject("sourceAmount.amount", "must not be empty");
-  }
-  const sourceAmount: Money = {
-    asset: rawSourceAmount.asset,
-    amount: rawSourceAmount.amount,
-  };
-
-  let corridorId: string | undefined;
-  if ("corridorId" in o && o.corridorId !== undefined) {
-    if (typeof o.corridorId !== "string") {
-      return reject("corridorId", "expected a string");
-    }
-    if (o.corridorId.length === 0 || o.corridorId.length > MAX_CORRIDOR_ID) {
-      return reject("corridorId", `must be 1-${MAX_CORRIDOR_ID} characters`);
-    }
-    corridorId = o.corridorId;
-  }
-
-  let destAsset: string | undefined;
-  if ("destAsset" in o && o.destAsset !== undefined) {
-    if (typeof o.destAsset !== "string" || o.destAsset.length === 0) {
-      return reject("destAsset", "must be a non-empty string");
-    }
-    destAsset = o.destAsset;
-  }
-
-  let destJurisdiction: string | undefined;
-  if ("destJurisdiction" in o && o.destJurisdiction !== undefined) {
-    if (typeof o.destJurisdiction !== "string" || o.destJurisdiction.length === 0) {
-      return reject("destJurisdiction", "must be a non-empty string");
-    }
-    destJurisdiction = o.destJurisdiction;
-  }
-
-  let sender: PartyRef | undefined;
-  if ("sender" in o && o.sender !== undefined) {
-    const s = parseParty(o.sender, "sender");
-    if (!s.ok) return s;
-    sender = s.value;
-  }
-
-  let recipient: PartyRef | undefined;
-  if ("recipient" in o && o.recipient !== undefined) {
-    const r = parseParty(o.recipient, "recipient");
-    if (!r.ok) return r;
-    recipient = r.value;
-  }
-
-  let destinationFields: Record<string, string> | undefined;
-  if ("destinationFields" in o && o.destinationFields !== undefined) {
-    const parsedDf = parseDestinationFields(o.destinationFields);
-    if (!parsedDf.ok) return parsedDf;
-    destinationFields = parsedDf.value;
-  }
-
-  return ok({
-    sourceAmount,
-    ...(corridorId ? { corridorId } : {}),
-    ...(destAsset ? { destAsset } : {}),
-    ...(destJurisdiction ? { destJurisdiction } : {}),
-    ...(sender ? { sender } : {}),
-    ...(recipient ? { recipient } : {}),
-    ...(destinationFields ? { destinationFields } : {}),
+    ...(routeOption ? { routeOption } : {}),
   });
 }
 
@@ -812,14 +712,53 @@ export function createService(options: ServiceOptions): Service {
           },
         };
       }
+
+      const { routeOption, ...paymentIntent } = intent;
+      // A locked option carries the quote the sender was shown. It goes to the engine as
+      // ExecuteOptions.quote (#733), which honours it and refuses it once expired
+      // (QUOTE_EXPIRED) instead of re-quoting at a different rate.
+      let pinnedQuote: ExecuteOptions["quote"];
+      if (routeOption !== undefined) {
+        const verified = verifyRouteOption(routeOption, options.routeOptionSecret, {
+          corridorId: paymentIntent.corridorId,
+          sourceAmount: paymentIntent.sourceAmount,
+          receivingDomain: corridor.dest.endpoints.home_domain,
+          nowMs: now(),
+        });
+        if (!verified.ok) {
+          return {
+            status: verified.error.status,
+            body: {
+              error: "ROUTE_OPTION_INVALID",
+              reason: verified.error.code,
+              field: "routeOption",
+              message: verified.error.message,
+            },
+          };
+        }
+        if (verified.value.label === "locked" && verified.value.quote) {
+          const pinned = verified.value.quote;
+          pinnedQuote = {
+            id: pinned.id,
+            price: pinned.price,
+            expiresAt: pinned.expiresAt,
+            sourceAmount: pinned.sourceAmount,
+            destAmount: pinned.destAmount,
+            ...(pinned.fee ? { fee: pinned.fee } : {}),
+            firm: true,
+          };
+        }
+      }
+
       // Owner comes from the VALIDATED bearer, never from the body — a client
       // must not be able to claim another tenant's runs by asking.
       // The request id travels with it: every log line and audit entry the run
       // produces is stamped with the same id this response echoes.
-      const p = execute(intent, corridor, options.deps, {
+      const p = execute(paymentIntent, corridor, options.deps, {
         owner: presentedKey,
         requestId: ctx.requestId,
         ...(ctx.traceparent ? { traceparent: ctx.traceparent } : {}),
+        ...(pinnedQuote ? { quote: pinnedQuote } : {}),
       });
       trackExecution(intent.idempotencyKey, p);
       const result = await p;
@@ -829,205 +768,6 @@ export function createService(options: ServiceOptions): Service {
       return {
         status: STATUS_BY_CODE[result.error.code] ?? 500,
         body: { error: result.error.code, message: result.error.message },
-      };
-    }
-
-    // --- POST /routes ---
-    if (req.method === "POST" && path === "/routes") {
-      if (draining) {
-        return { status: 503, body: { error: "draining" } };
-      }
-      const parsed = parseRouteBody(req.body);
-      if (!parsed.ok) {
-        return {
-          status: 400,
-          body: {
-            error: "invalid route request",
-            field: parsed.error.field,
-            reason: parsed.error.reason,
-          },
-        };
-      }
-      const routeReq = parsed.value;
-      if (!isSettleableAmount(routeReq.sourceAmount.amount)) {
-        return {
-          status: 422,
-          body: {
-            error: "AMOUNT_INVALID",
-            field: "sourceAmount.amount",
-            message: "amount must be a positive decimal",
-          },
-        };
-      }
-
-      if (routeReq.corridorId) {
-        const corridor = options.corridors.get(routeReq.corridorId);
-        if (!corridor) {
-          return {
-            status: 404,
-            body: { error: "unknown corridor", corridorId: routeReq.corridorId },
-          };
-        }
-        if (!assetMatchesCorridor(routeReq.sourceAmount.asset, corridor)) {
-          return {
-            status: 422,
-            body: {
-              error: "AMOUNT_INVALID",
-              field: "sourceAmount.asset",
-              message: "asset does not match the corridor's source or bridge asset",
-            },
-          };
-        }
-      }
-
-      const matching: Corridor[] = [];
-      for (const c of options.corridors.values()) {
-        if (routeReq.corridorId && c.id !== routeReq.corridorId) continue;
-        if (!assetMatchesCorridor(routeReq.sourceAmount.asset, c)) continue;
-        if (routeReq.destAsset && c.dest.asset !== routeReq.destAsset) continue;
-        if (
-          routeReq.destJurisdiction &&
-          c.compliance.dest_jurisdiction !== routeReq.destJurisdiction
-        ) {
-          continue;
-        }
-        matching.push(c);
-      }
-
-      interface EvaluatedCandidate {
-        readonly corridorId: string;
-        readonly label: "proven" | "verified" | "unverified";
-        readonly runnable: boolean;
-        readonly trust: "attested" | "manifest";
-        readonly protocol: string;
-        readonly sourceAmount: Money;
-        readonly destinationDomain: string;
-        readonly destAsset: string;
-        readonly destJurisdiction?: string;
-        readonly limits?: {
-          readonly min?: string;
-          readonly max?: string;
-          readonly canaryMax?: string;
-        };
-        readonly verifiedAtTime: number;
-        readonly faults: number;
-      }
-
-      const evaluated: EvaluatedCandidate[] = [];
-      const nowDate = new Date(now());
-
-      for (const c of matching) {
-        const live = liveness(c, nowDate);
-        if (live.state === "not-runnable") continue;
-
-        // Check breaker status
-        const breaker = options.deps.health ? await options.deps.health.get(c.id) : undefined;
-        if (breaker?.state === "open") continue;
-
-        // Check limits if configured
-        if (c.limits?.min_amount) {
-          const comp = compareAmounts(routeReq.sourceAmount.amount, c.limits.min_amount);
-          if (comp.ok && comp.value < 0) continue;
-        }
-        if (c.limits?.max_amount) {
-          const comp = compareAmounts(routeReq.sourceAmount.amount, c.limits.max_amount);
-          if (comp.ok && comp.value > 0) continue;
-        }
-        if (live.state !== "proven" && c.proof?.canary_max_amount) {
-          const comp = compareAmounts(routeReq.sourceAmount.amount, c.proof.canary_max_amount);
-          if (comp.ok && comp.value > 0) continue;
-        }
-
-        // Evaluate via resolver
-        let trust: "attested" | "manifest";
-        try {
-          const dummyIntent: PaymentIntent = {
-            idempotencyKey: `route-plan-${c.id}`,
-            corridorId: c.id,
-            sender: routeReq.sender ?? { id: "anonymous-sender" },
-            recipient: routeReq.recipient ?? { id: "anonymous-recipient" },
-            sourceAmount: routeReq.sourceAmount,
-            ...(routeReq.destinationFields
-              ? { destinationFields: routeReq.destinationFields }
-              : {}),
-          };
-          const decision = await options.deps.resolver.resolve(dummyIntent, c);
-          trust = decision.trust;
-        } catch {
-          // Unattested or refused by resolver: fail closed for this candidate
-          continue;
-        }
-
-        const limits =
-          c.limits?.min_amount || c.limits?.max_amount || c.proof?.canary_max_amount
-            ? {
-                ...(c.limits?.min_amount ? { min: c.limits.min_amount } : {}),
-                ...(c.limits?.max_amount ? { max: c.limits.max_amount } : {}),
-                ...(c.proof?.canary_max_amount
-                  ? { canaryMax: c.proof.canary_max_amount }
-                  : {}),
-              }
-            : undefined;
-
-        evaluated.push({
-          corridorId: c.id,
-          label: live.state as "proven" | "verified" | "unverified",
-          runnable: live.runnable,
-          trust,
-          protocol: c.dest.protocol,
-          sourceAmount: routeReq.sourceAmount,
-          destinationDomain: c.dest.endpoints.home_domain,
-          destAsset: c.dest.asset,
-          ...(c.compliance.dest_jurisdiction
-            ? { destJurisdiction: c.compliance.dest_jurisdiction }
-            : {}),
-          ...(limits ? { limits } : {}),
-          verifiedAtTime: live.verifiedAt ? new Date(live.verifiedAt).getTime() : 0,
-          faults: breaker?.consecutiveFailures ?? 0,
-        });
-      }
-
-      // Rank according to RFC 0004 §4 Ranking Rule:
-      // 1. Proof tier: proven > verified > unverified
-      // 2. Trust: attested > manifest
-      // 3. Freshness: Higher verifiedAt / more recently verified
-      // 4. Health Score: Lower faults takes priority
-      // 5. Deterministic tie-breaker
-      evaluated.sort((a, b) => {
-        const tierWeight = { proven: 3, verified: 2, unverified: 1 };
-        const tierDiff = tierWeight[b.label] - tierWeight[a.label];
-        if (tierDiff !== 0) return tierDiff;
-
-        const trustWeight = { attested: 2, manifest: 1 };
-        const trustDiff = trustWeight[b.trust] - trustWeight[a.trust];
-        if (trustDiff !== 0) return trustDiff;
-
-        const freshDiff = b.verifiedAtTime - a.verifiedAtTime;
-        if (freshDiff !== 0) return freshDiff;
-
-        const faultDiff = a.faults - b.faults;
-        if (faultDiff !== 0) return faultDiff;
-
-        return a.corridorId.localeCompare(b.corridorId);
-      });
-
-      const routes: RouteOption[] = evaluated.map((item, idx) => ({
-        rank: idx + 1,
-        corridorId: item.corridorId,
-        label: item.label,
-        runnable: item.runnable,
-        trust: item.trust,
-        protocol: item.protocol,
-        sourceAmount: item.sourceAmount,
-        destinationDomain: item.destinationDomain,
-        destAsset: item.destAsset,
-        ...(item.destJurisdiction ? { destJurisdiction: item.destJurisdiction } : {}),
-        ...(item.limits ? { limits: item.limits } : {}),
-      }));
-
-      return {
-        status: 200,
-        body: { routes },
       };
     }
 
@@ -1093,6 +833,22 @@ export function createService(options: ServiceOptions): Service {
       if (!run || (options.apiKeys && !ownerMatches(run.owner, presentedKey))) {
         return { status: 404, body: { error: "not found" } };
       }
+      const corridor = options.corridors.get(run.corridorId);
+      const runRoute = run as typeof run & {
+        receivingDomain?: string;
+        routeProtocol?: string;
+        priceLabel?: "locked" | "indicative" | "estimated";
+      };
+      const receivingDomain = runRoute.receivingDomain ?? corridor?.dest.endpoints.home_domain;
+      const protocol = runRoute.routeProtocol ?? corridor?.dest.protocol;
+      const priceLabel =
+        runRoute.priceLabel ??
+        (run.quoteFirm === true
+          ? "locked"
+          : run.quoteFirm === false
+            ? "indicative"
+            : undefined);
+
       return {
         status: 200,
         body: {
@@ -1101,10 +857,13 @@ export function createService(options: ServiceOptions): Service {
           state: run.state,
           transactionId: run.transactionId,
           stellarTxHash: run.stellarTxHash,
+          ...(receivingDomain && protocol ? { route: { receivingDomain, protocol } } : {}),
+          ...(priceLabel ? { price: { label: priceLabel } } : {}),
           // Only the error CODE, never the stored message: lastError is
           // `${code}: ${message}` and the message carries anchor URLs, upstream
           // HTTP bodies and other internals the caller has no business seeing.
           error: errorCode(run.lastError),
+          ...(run.estimateGap !== undefined ? { estimateGap: run.estimateGap } : {}),
         },
       };
     }

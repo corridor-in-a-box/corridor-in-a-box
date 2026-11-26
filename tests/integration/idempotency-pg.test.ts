@@ -223,6 +223,27 @@ run("PostgresIdempotencyStore (live Postgres)", () => {
     expect(got?.lastError).toBeUndefined();
   });
 
+  it("round-trips estimateGap through create, get and listByState (#627)", async () => {
+    const s = store();
+    // Written on create: a negative gap (a loss the business absorbed).
+    await s.create({ ...newRun("k-gap"), estimateGap: "-2.5" });
+    expect((await s.get("k-gap"))?.estimateGap).toBe("-2.5");
+
+    // A later write without a gap keeps the stored one.
+    await s.put({ ...newRun("k-gap"), state: "reconciled", version: 1 });
+    expect((await s.get("k-gap"))?.estimateGap).toBe("-2.5");
+
+    // A later write with a gap records the new one, and listByState reads it too.
+    await s.put({ ...newRun("k-gap"), state: "completed", version: 2, estimateGap: "0" });
+    expect((await s.get("k-gap"))?.estimateGap).toBe("0");
+    const listed = await s.listByState("completed");
+    expect(listed.find((r) => r.idempotencyKey === "k-gap")?.estimateGap).toBe("0");
+
+    // A run with no gap reads back undefined, not null.
+    await s.create(newRun("k-no-gap"));
+    expect((await s.get("k-no-gap"))?.estimateGap).toBeUndefined();
+  });
+
   it("round-trips settlementKind and settlementRef (adapter and stellar)", async () => {
     const s = store();
     await s.create(newRun("k-adapter"));
@@ -325,5 +346,75 @@ run("PostgresIdempotencyStore (live Postgres)", () => {
       reference: "ref_migrated",
       reportedAt: 12345,
     });
+  });
+
+  it("adds receiving_domain, route_protocol, price_label and estimate_gap to a table created by the previous version", async () => {
+    await pool.query("drop table if exists corridor_resolutions");
+    await pool.query("drop table if exists corridor_runs");
+    await pool.query(`
+      create table corridor_runs (
+        idempotency_key text primary key,
+        corridor_id     text not null,
+        state           text not null,
+        version         integer not null,
+        transaction_id  text,
+        quote_id        text,
+        stellar_tx_hash text,
+        last_error      text,
+        owner           text,
+        updated_at      timestamptz not null default now()
+      );`);
+    await pool.query(
+      `insert into corridor_runs (idempotency_key, corridor_id, state, version)
+       values ('legacy-unpinned', 'c', 'settled', 1)`,
+    );
+
+    await migrate(pool as unknown as Queryable);
+
+    const s = store();
+    const legacy = await s.get("legacy-unpinned");
+    expect(legacy?.receivingDomain).toBeUndefined();
+    expect(legacy?.routeProtocol).toBeUndefined();
+    expect(legacy?.priceLabel).toBeUndefined();
+    expect(legacy?.estimateGap).toBeUndefined();
+
+    await s.create(newRun("migrated-pinned"));
+    await s.put({
+      idempotencyKey: "migrated-pinned",
+      corridorId: "c",
+      state: "quoted",
+      version: 1,
+      receivingDomain: "zeam.money",
+      routeProtocol: "sep31",
+      priceLabel: "locked",
+    });
+    const pinned = await s.get("migrated-pinned");
+    expect(pinned?.receivingDomain).toBe("zeam.money");
+    expect(pinned?.routeProtocol).toBe("sep31");
+    expect(pinned?.priceLabel).toBe("locked");
+
+    // Once pinned, a later write cannot drift the pinned route.
+    await s.put({
+      idempotencyKey: "migrated-pinned",
+      corridorId: "c",
+      state: "settled",
+      version: 2,
+      receivingDomain: "other.example",
+      routeProtocol: "sep6",
+      priceLabel: "estimated",
+    });
+    const stillPinned = await s.get("migrated-pinned");
+    expect(stillPinned?.receivingDomain).toBe("zeam.money");
+    expect(stillPinned?.routeProtocol).toBe("sep31");
+    expect(stillPinned?.priceLabel).toBe("locked");
+
+    await s.put({
+      idempotencyKey: "migrated-pinned",
+      corridorId: "c",
+      state: "completed",
+      version: 3,
+      estimateGap: "5",
+    });
+    expect((await s.get("migrated-pinned"))?.estimateGap).toBe("5");
   });
 });

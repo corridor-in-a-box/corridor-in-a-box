@@ -7,6 +7,573 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
+### Added — Fall back to the next route before funds move ([#626](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/626))
+
+- When the primary route fails before any funds move (a refused quote, a KYC rejection, or a
+  transaction that cannot be opened), the engine tries the resolver's alternates as linked runs
+  under `<key>:alt1`, `<key>:alt2`, up to `maxAlternates` (default 2; `0` turns fallback off).
+  Once a run reaches `settling`, no other route is tried.
+- A resumed run whose route now resolves to a different receiving domain than the one stored on
+  the run (#734) is refused with `ROUTE_PINNED`.
+- The router's resolver option type is `RouteCandidate`, so it does not clash with the planner's
+  RFC 0004 `RouteOption`.
+
+### Added — router ranking function ([#611](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/611))
+
+- `rank(options, { estimateMarginBps })` in `@corridor/router` orders route options per RFC 0004
+  §1 "Ranking": by the cautious recipient amount, then reliability, then delivery time, then
+  receiving domain, with no hidden weights. It is pure: it returns a new array and never
+  changes its input, and options equal on every key keep their input order.
+- The cautious amount comes from the price label: a `locked` amount as quoted, an `indicative`
+  or `estimated` (P25) amount minus the estimate margin (default 50 bps, RFC 0004 D3).
+  `cautiousRecipientAmount` exposes that step. Amounts stay decimal strings on scaled BigInts.
+- Domains compare by code unit, so the order is the same under every locale. A malformed or
+  negative amount, an unknown label, a reliability outside 0..1 or options in different assets
+  throw a `RangeError` instead of ranking silently wrong.
+- A full `RouteOption` can be ranked directly. Property tests use the repo's seeded generator:
+  the result is a permutation of the input and stable for equal inputs.
+
+### Added — estimate gap when a business guarantees estimated prices ([#627](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/627))
+
+- With `guaranteeEstimates` on (`EngineDeps` or `ExecuteOptions`, RFC 0004 D4), the engine
+  records `estimateGap` on the run: the anchor's actual payout minus the guaranteed amount,
+  computed with decimal-safe money arithmetic. Positive is a gain, negative a loss the business
+  absorbed, zero an exact match. Nothing is recorded when the option is off.
+- The guaranteed amount defaults to the quote's `destAmount` and can be set with
+  `ExecuteOptions.guaranteedAmount`. The actual amount comes from the anchor's reported
+  `amountOut` (or `ExecuteOptions.actualAmount`).
+- `TransactionStatus` and `OpenTransaction` gain an optional `amountOut`. The SEP-31 and SEP-6
+  adapters read `amount_out` in `amount_out_asset`, falling back to the corridor's dest asset.
+- `estimateGap` is stored in a new nullable `estimate_gap` column on `corridor_runs` (added by
+  `migrate()` on existing tables), read back by `get()` and `listByState()`, and returned on
+  `RunResult` and `GET /payments/:key` (`RunStatus` in `openapi.yaml`).
+
+### Added — `reliability()` score for receiving anchors ([#612](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/612))
+
+- `reliability(anchor, deps)` in `@corridor/router` scores a receiving anchor from 0 to 1 (RFC
+  0004): the business's own success rate on it over 30 days, shrunk toward 0.5 below 20 runs,
+  and multiplied by an attestation-age factor that reaches 0 at the one-week freshness bound. No
+  attestation scores 0. The rules are documented in `docs/route-resolver.md` ("Reliability").
+
+### Added — rate collector loop with 15-minute schedule, jitter, and overlap guard ([#593](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/593))
+
+- `RateCollectorLoop` in `@corridor/engine` runs a list of collector steps (`{ name, run }`) on a
+  15-minute schedule by default (RFC 0004 §3). Each run starts after a random jitter (default up
+  to 5 s), a tick is skipped while the previous run is still going (`skipCount`,
+  `corridor.rate_collector.skipped_overlap`), one step failing does not stop the others, and
+  `stop()` cancels a pending jitter and waits for the run in flight.
+- `pnpm rate:collector` (`examples/run-rate-collector.ts`) is the always-on process. Its steps
+  are the real collectors: `sep38_prices` calls `pollSep38Prices` (#590) for the registry's
+  attested anchors on `STELLAR_NETWORK` plus `RATE_COLLECTOR_SEP38_ANCHORS`, and `dex_trades`
+  calls `collectDexTrades` (#591) for the pairs in `config/dex-pairs.json` over the last 24 hours
+  of complete 15-minute buckets. Every sample is written to Postgres (`DATABASE_URL`, required)
+  through `PostgresRateHistoryStore.recordFlaggingOutliers`. A step with nothing configured is
+  left out. It stops cleanly on `SIGTERM` / `SIGINT`.
+- `.env.example` documents `RATE_COLLECTOR_INTERVAL_MS`, `RATE_COLLECTOR_INTERVAL_SECONDS`,
+  `RATE_COLLECTOR_JITTER_MS`, `RATE_COLLECTOR_RUN_ON_START`, `RATE_COLLECTOR_SEP38_ANCHORS` and
+  `RATE_COLLECTOR_DEX_PAIRS`.
+
+### Added — `third_party_payout` flag for SEP-6 corridors ([#644](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/644))
+
+- A `protocol: sep6` dest can declare `third_party_payout: true` when the anchor has
+  confirmed it lets a business withdraw to a third party, which cannot be probed (RFC 0004 §5).
+  `third_party_payout_note`, recording who confirmed it and when, is required when the flag
+  is `true`.
+- `@corridor/manifest` refuses the flag and its note on every non-SEP-6 dest (`sep31`,
+  `wallet`, `custom:<id>`, legacy dests with no `protocol`), refuses any non-boolean form
+  (object, string, `null`), and refuses an empty note. All three rules live in one check that
+  reads the raw dest, so a protocol schema can no longer drop the field silently.
+- `allowsThirdPartyPayout(corridor)` is exported for the router: `true` only for a SEP-6 dest
+  with `third_party_payout: true`. Documented in `docs/sep-coverage.md`.
+
+### Added — wallet route: settlement to a recipient account ([#647](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/647))
+
+- `WalletAdapter` in `@corridor/stellar` implements the anchor seam for a
+  `protocol: wallet` corridor. It opens an `adapter_settled` payment, submits one
+  plain Stellar payment to the recipient's account through the injected
+  `SettlementSubmitter` (so `StellarSettlementSubmitter` keeps the Horizon
+  submission and ledger confirmation), and reports `completed` only after that
+  confirmation. Concurrent or resumed confirms reuse the one submission.
+- It builds on the `protocol: wallet` manifest shape and `PaymentIntent.wallet` from
+  [#646](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/646): the recipient
+  account and memo come from `intent.wallet`, and the adapter refuses a corridor whose
+  `dest.asset` or `dest.asset_issuer` differs from what settlement pays, since a wallet
+  route cannot convert assets.
+- `tests/wallet-adapter.test.ts` drives the adapter with a stubbed submitter:
+  quote, open, ledger-gated completion, idempotent confirm, submit failure,
+  invalid recipient/memo, refund refusal, and asset, issuer and protocol mismatch refusals.
+
+### Added — Daily rate summaries on the web app ([#596](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/596))
+
+- A `/rates` page lists the latest validated daily summary per pair and source (date, source,
+  sample count, min, P25, median, P75, max). Nothing is hardcoded: an unset or broken source
+  shows no numbers.
+- A public, cached JSON endpoint at `/api/rate-summaries` serves the same data.
+- New env var `RATE_SUMMARIES_URL` (documented in `.env.example`) points at the daily summary
+  JSON from #595.
+
+### Added — Planner step 1: `candidates()` by destination asset and country ([#604](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/604))
+
+- `candidates(request, corridors)` in `@corridor/router` returns every configured corridor whose
+  destination asset and country match the request, plus every other corridor with the reason it
+  did not match (RFC 0004 planner step 1). Configuration only: no registry, network or pricing.
+- Optional `dest.country` manifest field (ISO 3166-1 alpha-2, validated in `@corridor/manifest`).
+  When it is absent, the planner falls back to `compliance.dest_jurisdiction`, so existing
+  manifests and their hashes are unchanged.
+
+### Added — Rate history page ([#601](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/601))
+
+- `docs/rate-history.md` documents rate history per RFC 0004 §3: the four sources (SEP-38
+  indicative, DEX, reference FX, own payment) and each one's licence, the 15-minute collection
+  into Postgres, the daily summary (min, P25, median, P75, max, sample count) and the
+  minimum-data rule (at least 7 days and 100 samples). Undecided points are marked "to confirm".
+  Linked from the README docs list and from RFC 0004 §3.
+
+### Added — poll SEP-38 indicative prices from attested anchors ([#590](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/590))
+
+- `pollSep38Prices` in `@corridor/engine` runs one collection: it polls every anchor the
+  registry attests with a passing `sep38_quote` probe and a fresh attestation (plus any anchors
+  named directly), and writes one `sep38_price` sample per listed pair, tagged with the anchor
+  domain, through `PostgresRateHistoryStore`. A collector loop calls it on its schedule.
+- The quote server is read from `ANCHOR_QUOTE_SERVER` in the anchor's stellar.toml (never
+  guessed) and must be a public https URL. Sell assets come from the anchor's `GET /info`, so
+  they are issuer-qualified SEP-38 ids; `GET /prices` is sent with `sell_asset` and the required
+  `sell_amount`, and `GET /price` with the `context` the toml implies, through the router's
+  `fetchIndicativePrice`.
+- The stored rate is buy units per one sell unit (`buy_amount ÷ sell_amount`, fees included),
+  computed on scaled integers. `fetchIndicativePrice` takes an optional `rateScale` so rate
+  history keeps 18 decimal places.
+- Each request has a timeout. An anchor, a sell asset or a pair that fails (401, timeout,
+  malformed body, store refusal) is reported in the result and never stops the rest of the run.
+
+### Added — outlier flags in rate history, Flutterwave and Bitso findings, and five African anchors ([#602](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/602), [#660](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/660), [#661](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/661), [#664](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/664))
+
+- Rate history flags outliers ([#602](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/602)). `PostgresRateHistoryStore.recordFlaggingOutliers`
+  stores a sample with `outlier = true` when its rate is more than 10% (configurable, in basis
+  points) from the median of the series' last 20 samples; `setOutlier` sets or clears the flag
+  later, and `flagOutliers` re-runs the pass over stored history. The detector (`checkOutlier`,
+  `medianRate`) works on decimal strings with BigInt, never a float. Flagged samples are kept and
+  listed, and `buildEstimatedOption` leaves them out of the P25, the sample count and the history
+  span, so one bad price cannot drag an estimate.
+- Flutterwave and Bitso re-probed on 2026-11-25 ([#660](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/660), [#661](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/661)): both domains
+  resolve and both answer HTTP 404 for `/.well-known/stellar.toml`, so neither advertises a SEP
+  or a SEP-31 receive side. The dated findings are in `contracts/anchors.json`.
+- Five African anchors from the Stellar Anchor Directory join the fleet ([#664](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/664)):
+  Finclusive (`finclusive.com`), Chipper Cash (`chippercash.com`), Link (`linkio.africa`),
+  ImpalaPay (`impalapay.com`) and Yellow Card (`yellowcard.io`). Each was probed on 2026-11-25;
+  only Finclusive's toml loads, and its API host's TLS certificate has expired. The selection
+  method, the probe results and the entries left out are recorded in `contracts/anchors.json`.
+
+### Added — Registry and attester upgrade tooling, and a preflight for the nightly attestation ([#584](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/584))
+
+- `pnpm preflight:registry` checks the deployed registry and attester against this checkout
+  before anything is written: it reads each contract's wasm spec for the functions the clients
+  call, and simulates `put_anchor` with every current SEP and probe bit. Read-only, no key. It
+  prints one line and exits 1 when the contracts are behind, naming the missing bits or
+  functions. It fails closed: an answer it cannot interpret is an error, never a pass.
+- The `attest-anchors` workflow runs it before `pnpm attest`. A rejected bit or a missing core
+  function stops the submit step (the writes would fail per anchor); missing only the receive
+  functions `pnpm attest` already skips (#773) lets the writes that can land go through, and
+  the run stays red until the contracts are upgraded.
+- `pnpm upgrade:registry [--contract attester]` builds the wasm, uploads it and calls the
+  admin-only `upgrade(new_wasm_hash)`. It simulates by default, submits only with `--submit`
+  (signed by `REGISTRY_ADMIN_SECRET`, which must be the contract's admin and is read from the
+  environment only), defaults to testnet and refuses the public network without
+  `--allow-mainnet`. After a submit it prints the `deployments.json` upgrade entry to add.
+- Runbook in `docs/operations.md`, "Registry and attester upgrades". Diagnosis on 2026-11-25:
+  the testnet registry runs `2db79e0e…` and the attester `1334e4ae…` (the 2026-11-17 upgrades,
+  which took the nightly back to green); `main` builds `2e158d11…` and `e77a15cb…`. The deployed
+  registry accepts all seven SEP and probe bits but lacks `put_receive`, `get_receive` and
+  `receive_limits`, and the attester lacks `attest_receive`, so receive limits are not being
+  written.
+
+### Added — Stellar DEX trade prices in rate history ([#591](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/591))
+
+- `collectDexTrades` (`@corridor/engine`) reads Horizon `/trade_aggregations` at a 15-minute
+  resolution for each pair in `config/dex-pairs.json` and writes one sample per bucket through
+  `PostgresRateHistoryStore`: `source: "dex_trade"`, no anchor domain, sell = base and buy =
+  counter as SEP-38 asset strings, the bucket's `close` verbatim as the rate, and the trade
+  count and volumes in `detail`. Buckets with zero trades are skipped; re-reading an
+  overlapping window stores nothing twice.
+- `config/dex-pairs.json` starts with the corridors' on-chain assets: Circle USDC/XLM on both
+  networks, and the destination anchors' tokens against USDC on the public network (Cowrie
+  `NGNT`, Zeam `ZARZ`; issuers checked against each anchor's `stellar.toml`).
+- Tests run on Horizon responses recorded on 2026-11-25.
+
+### Added — Percentile and window helpers for rate history ([#597](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/597))
+
+- `percentile`, `percentileRank`, `windowed`, `compareDecimals` and `canonicalDecimal` in
+  `@corridor/router` (`rate-percentile.ts`). One documented method, "lower": the value at
+  `floor(p × (n − 1))`, so the result is always an observed rate, digit for digit, with no
+  rounding. Decimal strings are compared as BigInts and `p` is read as the decimal it is
+  written as.
+- The estimated price (#749) now takes its window and its P25 from these helpers. Its output is
+  unchanged.
+- Seeded property tests, like `money-properties.test.ts`: the result is one of the inputs and
+  lies within min/max, is monotonic in `p` and independent of input order; `windowed` keeps
+  exactly the in-window samples; the estimated price's P25 equals `percentile(windowed, 0.25)`.
+
+### Changed — `execute()` records a supplied quote and checks it fits the payment ([#622](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/622))
+
+- A quote passed as `ExecuteOptions.quote` (#733) is now checked before use: it must be for the
+  intent's source asset and amount (settlement sends the quote's amount, while the corridor
+  limits and canary cap were checked against the intent's), with an id, a positive price and
+  dest amount, and an expiry. Otherwise the run stops with `QUOTE_UNAVAILABLE` (not retryable)
+  and is never re-quoted.
+- The transition into `quoted` records `quoteSupplied: true` in the audit trail, and the run
+  logs `corridor.quote.supplied`.
+
+### Added — live testnet failure scenarios against the reference anchor ([#673](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/673), [#674](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/674), [#675](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/675), [#676](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/676))
+
+- `.github/workflows/reference-live-scenarios.yml` runs, daily and on demand,
+  against one reference stack: amounts below the anchor's minimum and above its
+  maximum (`pnpm verify:scenario-limits`, refused for the limit with nothing
+  submitted and the signer's balance unchanged), the anchor asking for more
+  customer information (`scripts/fault-scenario.sh ask-info held`) and the
+  anchor going down mid-flow (`scripts/fault-scenario.sh outage=45 completed`).
+  The refund scenario keeps running in `reference-corridor.yml`.
+- `pnpm verify:corridor` now checks the ledger after every run: the signer's
+  transactions on Horizon must show the payment leaving exactly once if it
+  settled and never if it did not, or it exits `5`. It writes the verdict, trail
+  and settlement to `$GITHUB_STEP_SUMMARY` under `SCENARIO`, and
+  `fault-scenario.sh` adds whether the fault applied — so every fault scenario,
+  refund included, leaves its evidence in the job page.
+- `scripts/reference-anchor.sh faults outage=N` stops the anchor's SEP and
+  platform servers for `N` seconds once it holds a payment's funds, starts them
+  again, then pays out; `SEND_MIN_AMOUNT` on `up` raises the bridge asset's
+  advertised SEP-31 minimum, which the image leaves at 0.
+- Unit tests (`tests/live-scenarios.test.ts`) for the ledger accounting, the
+  out-of-limits amounts and the engine's outcome in each scenario, with no
+  network or containers.
+
+### Fixed — `reference-anchor.sh faults` never found the payment to break
+
+- `faults` joined its SQL predicate with `IFS=' AND '`, which bash reduces to
+  its first character, so every `delay`, `reject`, `ask-info` and `refund` ran
+  `... >= N status = 'pending_receiver'`, an invalid query whose error was
+  discarded: the fault waited out `FAULT_TIMEOUT_SECS` and never applied,
+  including the nightly refund scenario in `reference-corridor.yml`.
+- `faults ask-info` wrote a `message` column the platform's `sep31_transaction`
+  table does not have (Anchor Platform 2.10.1 calls it
+  `required_info_message`), so the update always failed.
+- `faults reject` and `faults refund` posted their JSON-RPC to the platform
+  API's `/transactions`, a REST resource that refuses `POST` (HTTP 500); the
+  RPC controller is mapped at the API's root. `ask-info`, `refund` and the new
+  `outage` were run against a live reference stack on testnet after these
+  fixes; `delay` and `reject` share the fixed code but were not run.
+
+### Added — send app: amount form, route options, locked-price countdown and recipient fields ([#685](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/685), [#686](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/686), [#687](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/687), [#688](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/688))
+
+- `/send` now runs the send flow inside the existing scaffold and testnet banner. The form checks
+  the amount as a decimal string (positive, at most 7 decimals, within Stellar's limit and the
+  anchor's min and max when known) and offers only destinations read from the testnet corridor
+  manifests ([#685](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/685)).
+- Route options use the router's `RouteOption` and show every option with its own label and
+  RFC 0004 §2 wording ("Recipient gets X. Locked for N s.", "About X. Final amount set at payout.",
+  "About X (estimated)" or "At least X (estimated)"), as a keyboard-usable radio group. Router
+  reasons are reworded in plain language ([#686](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/686)).
+- A locked price counts down to its expiry; once it expires the expired-price screen replaces it
+  and Send is disabled, and Send re-checks the clock at the moment it is pressed ([#687](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/687)).
+- Recipient fields are built from the receiving anchor's `GET /sep31/info`
+  (`fields.transaction`) and SEP-12 `GET /customer` responses, with no field list in the app, and
+  reload when the route changes. Transaction fields go with the payment as `destinationFields`;
+  SEP-12 fields are kept apart for the anchor's KYC server ([#688](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/688)).
+- Route planning, the field lookup and sending are injected into `<SendApp>` (`PlanRoutes`,
+  `LoadReceiverFields`, `SendPayment` in `web/lib/send.ts`). `@corridor/service` offers none of
+  them yet, so the page says routes can't be listed rather than show made-up ones.
+
+### Added — Rate history schema and migrations ([#589](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/589))
+
+- A `rate_samples` Postgres table for RFC 0004 §3: network (`testnet` or `public`), sell and
+  buy asset (SEP-38 strings), source (`sep38_price`, `dex_trade`, `reference_fx`,
+  `own_payment`), anchor domain, rate, sampled-at time, payment run, outlier flag and a JSON
+  detail. Check constraints tie the anchor domain and the run to the sources that have them.
+- A unique key per series and instant makes a collector's re-read a no-op, and its order serves
+  the planner's window query; a second key allows one `own_payment` sample per run.
+- A `rate_daily_summaries` table (sample and outlier count, min, P25, median, P75, max per
+  series and UTC day) for publishing and for pruning old samples safely.
+- Rates are stored as `numeric` and handled as decimal strings, never floats. The shared
+  `migrate()` creates both tables idempotently; it now needs Postgres 15 or later.
+- `PostgresRateHistoryStore` (`record()`, `list()`, `upsertDailySummary()`,
+  `listDailySummaries()`) is exported from `@corridor/engine`.
+
+### Added — Latin America anchor fleet ([#665](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/665))
+
+- `ntokens.com` (nTokens, Brazil), `pubnet-sep.latamex.com` (Latamex, Argentina and Brazil)
+  and `etherfuse.com` (Etherfuse, Mexico) in `contracts/anchors.json`, each with a stellar.toml
+  fetched and probed with `pnpm probe:anchor` on 2026-11-25 and a source. Amero Exchange and
+  Ripio were left out: neither serves a stellar.toml.
+
+### Added — KB Trading anchor for Europe fleet ([#667](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/667))
+
+- `kbtrading.org` (KB Trading, Road Town, Tortola, British Virgin Islands) in
+  `contracts/anchors.json`, probed 2026-11-25 with `pnpm probe:anchor kbtrading.org`.
+  Toml fetch passes (sha256 ab43d86d883dd3c0e85bf0a0df7ab58dcc7ff05a44f818bc825a89c5f5d96e5f),
+  advertises SEP-1, SEP-6, SEP-10, SEP-12, SEP-24, SEP-31. sep10_auth passes (JWT issued),
+  sep31_info receives CLPX (min 14000, max 8500000), sep6_info withdraws BTCLN, sep6_auth
+  returns HTTP 403, sep12_status returns HTTP 400. No European corridor or country evidence
+  is verified (BVI is not in Europe; assets are non-European or XCHF test asset without
+  European corridor proof), so `countries` is empty per repository convention (never infer
+  `countries` from assets). It is recorded as a non-European SEP-31 anchor. No corridor
+  manifest is written.
+
+### Added — Dashboard filters for SEP, asset and country ([#668](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/668))
+
+- The attested-anchor list on each network can be filtered by SEP (advertised, or SEP-31
+  probed and working), probed receive asset, declared country and domain. The filters live in
+  the URL beside `?network=`, so a filtered view can be linked to.
+
+### Added — configurable failure injection for the reference anchor ([#678](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/678))
+
+- `scripts/reference-anchor.sh faults <spec>` makes the local Anchor Platform
+  reference stack misbehave on demand: `delay=N` holds the payout, `reject`
+  fails the transaction, `ask-info` parks it in `pending_customer_info_update`,
+  `refund` reports the full refund SEP-31 allows, and `quote-expiry=N` issues
+  quotes that expire in `N` seconds. It plays the anchor's business server (the
+  platform API, or the status the platform reads back) instead of forking the
+  platform, and targets the next payment opened after it is armed — or one pinned
+  with `FAULT_TX_ID` and/or selected by amount with `FAULT_AMOUNT`.
+- `pnpm verify:corridor` accepts `EXPECT_STATE`, so a fault scenario asserts the
+  terminal state the engine should reach (for example `refunded`) instead of
+  requiring `completed`.
+- `scripts/fault-scenario.sh [spec] [expected-state]` runs one live corridor under
+  a fault (default `refund` → `refunded`), and `reference-corridor.yml` runs it
+  on its schedule against the reference stack — so the control is exercised by a
+  live scenario, not only documented.
+- `docs/operations.md` documents every fault, how it is applied, and the expected
+  engine outcome for each.
+
+### Added — a server-side proxy from the send app to the service ([#690](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/690))
+
+- `POST /api/send/payments` and `GET /api/send/payments/:key` in `web/` call `@corridor/service` with
+  `SEND_APP_SERVICE_API_KEY`, which is read on the server only. The browser holds no key and cannot
+  choose the service URL, the path or any header.
+- The routes take no credentials from the caller, so they are gated. They fail closed with 503 until
+  `SEND_APP_SERVICE_URL` and `SEND_APP_CORRIDORS` are set, refuse a payment for any corridor not listed
+  in `SEND_APP_CORRIDORS` (403), and limit each client to 10 payments and 120 reads per minute (429).
+- Service error bodies are cut down to their code and the offending field before they reach the browser.
+- `tests/web-send-proxy.test.ts` covers the proxy and checks that no client component imports it or
+  names the key variable.
+
+### Changed — probe findings recorded for MyKobo, BlindPay, Coins.ph and Anclap ([#650](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/650), [#651](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/651), [#653](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/653), [#654](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/654))
+
+- `mykobo.co` (#650): the probe is right and the anchor's endpoint is down. The toml loads and
+  advertises SEP-6, SEP-10, SEP-12, SEP-24 and SEP-31, but every one of those APIs lives on
+  `stellar.mykobo.co`, a CNAME to an AWS load balancer name that no longer exists (NXDOMAIN), so
+  `sep31_info` fails with `fetch failed` before any HTTP exchange. SEP-31 `GET /info` needs no
+  auth, so there is nothing to fix in the probe.
+- `blindpay.com` (#651): `toml_fetch` gets HTTP 403 from a Cloudflare challenge page; nothing about
+  what it serves can be read.
+- `coins.ph` (#653): the domain resolves, but `/.well-known/stellar.toml` returns an HTML 404 page
+  (some attempts also reset the TLS connection), so there is no toml and no SEP-31 receive side.
+- `anclap.com.ar` (#654): the domain does not exist in DNS (NXDOMAIN, no name servers).
+- Dated findings are in `contracts/anchors.json`; `tests/probe-anchor-findings.test.ts` checks the
+  records and that the probe reports an unreachable SEP-31 host as a `sep31_info` failure.
+
+### Added — send app page scaffold with a permanent testnet banner ([#684](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/684))
+
+- New `/send` route in the web app (`web/app/send/layout.tsx`, `web/app/send/page.tsx`) with a
+  testnet banner (`web/components/send/TestnetBanner.tsx`) on every screen under it. The banner
+  has no close control. "Send" is in the top navigation, which now wraps instead of overflowing
+  at 375 px.
+
+### Added — load test: concurrent payments against the reference anchor ([#681](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/681))
+
+- `pnpm load-test` (`examples/load-test.ts`) sends up to 100 testnet payments at once through
+  the reference anchor and reports latency and failures. It fails on a duplicate settlement,
+  checked both in the engine's records and on the ledger through Horizon (one successful
+  transaction per payment memo). It refuses mainnet manifests.
+- `.github/workflows/load-test.yml` runs it on `workflow_dispatch` only and writes the report to
+  the job summary. New env vars `CONCURRENCY` and `SUMMARY_FILE` are in `.env.example`.
+
+### Changed — Zeam and Cowrie sandbox payment attempts recorded ([#682](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/682), [#683](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/683))
+
+- Checked 2026-11-24 whether a testnet or sandbox payment is possible through `zeam` and
+  `ng-cowrie`. It is not: both stellar.toml files declare only the public network, both SEP-10
+  endpoints issue public-network challenges, Cowrie has no public sandbox host, and Zeam's
+  sandbox serves its own API Gateway and needs a business-portal account this repo does not
+  have. No payment was attempted and no funds moved. The evidence is in
+  each manifest's header and `status_note`.
+
+### Changed — the mainnet storage TTL entry criterion is recorded as met ([#698](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/698))
+
+- `docs/mainnet-registry.md` §1 criterion 1 now says so with evidence instead of leaving the
+  reader to check: #245 was fixed by [#447](https://github.com/corridor-in-a-box/corridor-in-a-box/pull/447)
+  (merged 2026-10-18). The entry names what extends storage on every write
+  (`extend_instance`/`extend_record` in the registry, `extend_instance`/`extend_entry` in the
+  attester, plus the permissionless `registry.bump`) and the four `cargo test` cases — run by
+  CI's `contracts` job — that measure the lifetime, so the criterion can be re-checked rather
+  than re-asserted. It also records the limit: `bump` keeps a live entry alive, it cannot revive
+  one already archived.
+
+### Added — categorize stellar.toml fetch failure reasons ([#662](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/662))
+
+- The probe records a categorized `tomlFailureReason` (`dns`, `timeout`, `http_<status>`, `tls`, or `parse`) when fetching an anchor's `stellar.toml` fails, distinguishing network/DNS unreachable hosts, timeouts, TLS failures, HTTP errors, and malformed responses.
+
+### Added — conformance test kit for planners ([#616](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/616))
+
+- `@corridor/router/testing` exports `describePlannerContract`, `checkPlannerContract` and
+  `expectPlannerContract`: the planner rules as executable cases (an unattested option is never
+  offered, every dropped option carries a reason, the same input yields the same order, every label
+  is `locked`, `indicative` or `estimated`). Labels are the router's `AllowedPriceLabel`.
+  Documented in `docs/route-resolver.md`.
+- `tests/planner-contract.test.ts` runs the suite over a stub planner and asserts it fails a planner
+  that breaks each rule.
+
+### Added — wallet route manifest shape ([#646](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/646))
+
+- `protocol: wallet` destinations: the corridor declares `asset`, `asset_issuer` (optional), `settlement.network`
+  and a `home_domain`; each `PaymentIntent` supplies the recipient `wallet` (`account`, optional `memo`/`memoType`),
+  validated by `WalletDestinationSchema`. Schema and validation only: a wallet lane is reported `not-runnable`
+  because the engine cannot execute one yet, and `corridor plan` is unchanged.
+
+### Added — routing choice in the audit trail (#628)
+
+- `RouteDecision` takes an optional `ranking` (`OptionRanking` of `RankedOption`s in
+  `@corridor/router`). The engine records the chosen option, its RFC 0004 price label
+  (`locked` / `indicative` / `estimated`) and rank, and the reasons of the top three options
+  as `route` on the run's first audit entry out of `created`; `PostgresAuditSink` keeps it in
+  `detail`. When the resolver gives the chosen option no label, the run's own quote label is
+  recorded. Without a ranking the receiving adapter is recorded as the only option.
+  See `docs/route-resolver.md#recording-the-choice`.
+
+### Added — `RouteRequest`, `RoutePolicy`, `PriceLabel`, `RouteOption` and `RoutePlanner` types ([#603](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/603))
+
+- `@corridor/router` exports `RouteRequest`, `RoutePolicy`, `PriceLabel`, `RouteOption` and
+  `RoutePlanner` (`packages/router/src/planner.ts`), matching the route planner interface sketch
+  in `docs/rfcs/0004-smart-router.md` §1 with TSDoc on every type and field.
+
+### Added — the sender's chosen route on `POST /payments` ([#618](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/618))
+
+- `POST /payments` accepts an optional HMAC-SHA256-signed `routeOption`: the corridor,
+  receiving anchor, protocol, price label and, for a `locked` option, the quote the sender
+  was shown. `signRouteOption()` / `verifyRouteOption()` are exported from
+  `@corridor/service`. The service verifies the option with `routeOptionSecret` (env
+  `CORRIDOR_ROUTE_OPTION_SECRET`, wired in `examples/run-service.ts`) and passes a locked
+  quote to the engine as `ExecuteOptions.quote` (#733), so an expired quote is refused
+  rather than re-quoted.
+- New error code `ROUTE_OPTION_INVALID`, with a `reason` of `UNCONFIGURED`,
+  `INVALID_SIGNATURE` (400), `EXPIRED` (409), `MISMATCH` or `INVALID_LOCKED_QUOTE` (422).
+  It is documented in the OpenAPI spec, the HTTP API docs page and `docs/operations.md`.
+
+### Changed — estimated-price defaults follow RFC 0004 D3 ([#610](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/610))
+
+- `buildEstimatedOption` now defaults to a 50 bps margin (was 100) and drops a candidate unless it has
+  at least 100 samples (was 20) in the window and at least 7 days of history. The new
+  `minEstimateSpanDays` policy field sets that minimum, measured as now minus the oldest usable
+  sample across the whole history, not inside the window. A dropped outcome now carries `minSpanDays`.
+
+### Added — indicative price from SEP-38 `GET /price` ([#609](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/609))
+
+- `fetchIndicativePrice()` in `@corridor/router` reads an anchor's SEP-38 `GET /price` when it
+  offers no firm quote and returns an option labelled `indicative`. SEP-38 `price` is sell units
+  per one buy unit, so the destination amount is `buy_amount` (or `sell ÷ total_price` when the
+  anchor leaves it out), `rate` is buy per sell, and an answer whose
+  `total_price × buy_amount` misses `sell_amount` is refused.
+- Its ranking amount, `cautiousDestAmount`, is discounted by `estimateMarginBps`, 50 bps by
+  default (RFC 0004 D3), so an indicative option ranks below a firm one at the same raw rate.
+  `applyEstimateMargin()` and `DEFAULT_ESTIMATE_MARGIN_BPS` are exported alongside it.
+
+### Added — onboarding exporter for the self-hosted reference anchor ([#640](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/640))
+
+- `referenceAnchorExporter` is the first real `OnboardingExporter` (#639). It maps the shared
+  `BusinessProfile` onto the SEP-12 fields the SDF Anchor Platform reference server
+  (`scripts/reference-anchor.sh`) takes for a `sep31-sender`: the representative's SEP-9
+  natural-person fields, plus the business under the SEP-9 `organization.*` keys, with countries
+  encoded as ISO-3166-1 alpha-3.
+- `businessProfileFromCompanyProfile()` reads a v0 company profile (#637) into that
+  `BusinessProfile`, and `senderAccountFor()` picks the Stellar account to register under.
+  `registerReferenceAnchorSender()` submits the form through the SEP-31 adapter's
+  `registerCustomer`. Documents are never uploaded, only referenced by hash. The tests run
+  against `schemas/examples/company-profile.v0.json`.
+- `toAlpha3()` in `@corridor/probe` converts the alpha-2 codes its country table holds to
+  alpha-3.
+
+### Added — `corridor profile validate` ([#638](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/638))
+
+- `corridor profile validate <file.json> [--json]` checks a sending business's company profile
+  against the v0 JSON schema from #637 (`schemas/company-profile.v0.schema.json`), compiled with
+  ajv. The schema is bundled into the CLI, so the CLI and the schema are one source of truth.
+  Each problem is reported with its path and whether the field is missing, the wrong type or an
+  invalid value. Exit 0 when valid, 1 when not, 2 on bad usage.
+- The CLI exports a `CompanyProfile` type for the v0 profile, and its tests run against the
+  example profile in `schemas/examples/company-profile.v0.json`.
+
+### Added — resume-safe route pinning ([#625](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/625))
+
+- `PinnedRouteResolver` in `@corridor/router` resolves a run only to the receiving anchor
+  stored on it (`receivingDomain`, optional `routeProtocol`), so a resumed run never picks a
+  new anchor. With no stored route, or a stored route for another corridor, it refuses with
+  `UnpinnedRouteError`. On the public network, or whenever a registry is configured, it
+  applies the same `checkAttestation` gate as `RegistryRouteResolver`.
+- A pinned domain that differs from the passed corridor needs a `corridorFor` lookup that
+  returns that anchor's corridor. Without one the resolver refuses rather than rewriting
+  `home_domain` alone, which would attest one anchor while the adapter still called the
+  other's endpoints.
+
+### Added — a custody statement ([#707](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/707))
+
+- `docs/custody.md` says in one place that the project never holds funds or a key that can
+  move them: who holds the money at each step of a payment, the one key on the money path and
+  who holds it, what the project does and does not do, and the keys it does hold (attester,
+  registry admin, testnet CI seeds), none of which can move money. Linked from the README.
+
+### Added — onboarding exporter framework ([#639](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/639))
+
+- `@corridor/adapter-kit` exports a minimal `BusinessProfile`, the `OnboardingExporter`
+  interface and `createExporterRegistry()`, which rejects malformed and duplicate ids. An
+  exporter maps the profile onto one receiver's own onboarding form.
+  `examples/onboarding/example-receiver-exporter.ts` is a reference exporter, and
+  `docs/onboarding-exporters.md` explains how to add one.
+
+### Added — SEP-10 lane check with the business's own key ([#631](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/631))
+
+- `checkLane(corridor, { signer, fetchImpl?, timeoutMs? })` in `@corridor/router` runs
+  a real SEP-10 challenge/response against the corridor's receiving anchor with the
+  business's own signer and reports `open` (a JWT was issued), `closed` (the anchor
+  answered 401 or 403) or `unknown` (no `web_auth` endpoint, timeout, 5xx, malformed
+  response). A 400 stays `unknown`: it can mean our own malformed challenge, not an
+  onboarding refusal. The check moves no money and returns no JWT — the credential is
+  discarded, never logged or reported.
+- `tests/lane-check.test.ts` drives stub anchors that accept and refuse the signed
+  challenge, plus server-error, unreachable and no-endpoint cases; it also asserts the
+  JWT never reaches the result. Design context in `docs/rfcs/0004-smart-router.md`.
+
+### Added — error screens for the testnet send app ([#691](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/691))
+
+- `web/components/SendErrorState.tsx` renders a screen for each way a payment cannot go ahead: no routes,
+  every route dropped (listing each route and its reason), the locked price expired, and the payment failed.
+- `web/lib/send-errors.ts` holds the wording. A failed payment is worded from its error code alone, so
+  anchor URLs and upstream response bodies in the raw message are never shown.
+- `tests/web-send-errors.test.ts` covers each state.
+
+### Added — live crash-resume scenario against the reference anchor ([#677](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/677))
+
+- `pnpm verify:crash-resume` kills the service with `SIGKILL` after the payment has settled on
+  testnet, restarts it on the same Postgres and requires the run to reach `completed` with the
+  same transaction hash. It also checks Horizon for exactly one matching payment transaction.
+- The `reference-crash-resume` workflow runs it daily and on demand, writes the result to the
+  job summary and uploads the service and anchor logs on failure.
+
+### Added — a schema for `contracts/deployments.json` and the testnet upgrade record ([#701](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/701))
+
+- `contracts/deployments.schema.json` describes deployments and upgrades (wasm hash, transaction
+  hash, date and ledger). `public` stays valid with null addresses, and a network that records a
+  contract must also record `deployedAt`.
+- `contracts/deployments.json` records the 2026-11-17 testnet `upgrade()` of the registry and the
+  attester. The hashes were read from the testnet ledger, not estimated.
+- `tests/deployments.test.ts` validates the file and checks that missing or malformed fields fail.
+
+### Changed — `testanchor-sep6` records its blocked payout attempt ([#649](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/649))
+
+- `corridors/testanchor-sep6.corridor.yaml` now records the 2026-11-22 payout attempt: a funded
+  testnet account passed SEP-10 and SEP-12 and opened SEP-6 withdrawal
+  `19a2872f-278c-4867-9931-7e7f82ee67a6`, but it stayed `incomplete` with no
+  `withdraw_anchor_account`, so no Stellar payment could be sent.
+- `/sep6/withdraw-exchange` rejects USDC with HTTP 400 and the transaction's `more_info_url`
+  is the SEP-24 reference UI, whose business-server calls return 401 for the SEP-6 token.
+  No `proof:` block was added, because no payout completed.
+
 ### Fixed — stale documentation and comments
 
 - Docs said no transition enters `refund_pending` and that `refunded` is reachable only when
@@ -25,6 +592,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   points at the closed #196 as pending: it says there is no indicative-price path, which is
   what the firm-quote-only adapter actually does. The `sep6` no-quote-server message changed
   accordingly.
+
+### Added — a pilot readiness checklist ([#703](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/703))
+
+- `docs/pilot-readiness.md` is the list a licensed sending partner works through before a
+  first real payment and while a pilot runs: who is responsible for what (the partner holds
+  the licence, the key and the funds), then keys, limits, safety gates, monitoring, refunds
+  and a rehearsal, each item taken from the runbook, the key-management guide or the threat
+  model, with a table mapping it back to the threat model. It records that `corridor canary`
+  signs with a raw seed and has no KMS option, and how to canary without taking the
+  distribution account's key out of the vault. Linked from the runbook.
 
 ### Added — every library package builds to `dist/` with type declarations ([#262](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/262))
 
@@ -57,6 +634,25 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   for `engine/src/{run,verbs,state,idempotency}.ts` and `types/src/money.ts`; CI's `build`
   job runs it and uploads `coverage/lcov.info`. The numbers are in `CONTRIBUTING.md`.
 
+### Added — a testnet / mainnet switch on the dashboard ([#700](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/700))
+
+- The dashboard's attested anchors sit behind a Testnet / Mainnet switch. Each network is
+  read from its own registry over its own RPC (`fetchAttestations(network)`), and
+  `?network=public` links straight to the mainnet view. `STELLAR_NETWORK` chooses which
+  network opens first; `mainnet` is accepted for `public`, and a value that names neither
+  network now means testnet instead of an error.
+- Every `AnchorCard` and `CorridorCard` carries a badge naming its network, and an anchor
+  card's ledger and attester links go to that network's explorer. The corridor page still
+  reads the `STELLAR_NETWORK` registry only, and now says which one that is.
+- A network with no registry in `contracts/deployments.json`, which is mainnet today, shows
+  "No registry on Mainnet yet" and makes no RPC call. That is kept apart from a registry that
+  could not be read and from one that is empty. Once `public.registry` is set the mainnet
+  view fills in with no code change.
+- `tests/web-network.test.ts` covers the parsing, the URL and the empty state;
+  `tests/web-registry-source.test.ts` gives both networks a fake registry and checks that
+  each read goes to its own RPC and contract, and that one network being down does not blank
+  the other.
+
 ### Added — attester, full hash and explorer links on `AnchorCard` ([#290](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/290))
 
 - The web card links the attested ledger and the attester to stellar.expert for the
@@ -73,6 +669,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   provenance and an SBOM, after the same smoke test. Actions pinned by SHA.
 - Not yet run on a Docker daemon by the author; the CI `docker` job is the first build.
 
+### Added — five Asia-Pacific anchors in the fleet ([#666](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/666))
+
+- `contracts/anchors.json` gains `audd.digital` (Novatti's AUDD, Australia),
+  `cebuanalhuillier.com` (Cebuana, Philippines), `perahub.com.ph` (PeraHub, Philippines),
+  `ripplefox.com` (RippleFox, a CNY issuer) and `fchain.io` (FChain's Firefly). The first
+  three come from the Stellar Anchor Directory and the last two from the `stellar.toml` on
+  their own sites. The file's `$comment` records the source and the 2026-11-20 probe result
+  for each.
+- What the probe found: `fchain.io` passes `toml_fetch` and `sep6_info`; `audd.digital` and
+  `ripplefox.com` publish a toml with no SEP endpoint; `cebuanalhuillier.com` (HTTP 404) and
+  `perahub.com.ph` (its certificate does not validate) publish none, so the SEP-31 the
+  directory lists for them is unverified. No corridor manifest is added.
+- `docs/mainnet-registry.md` restates the fee budget for a 24-anchor fleet.
+
 ### Added — `@corridor/otel`, OpenTelemetry adapters for `Metrics` and `Logger` ([#273](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/273))
 
 - New package `@corridor/otel`: `otelMetrics(meter)` (counter per name for `increment`,
@@ -82,6 +692,27 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   nothing from OpenTelemetry.
 - `tests/otel.test.ts` uses the SDK's `InMemoryMetricExporter` and asserts counter and
   histogram values after an `execute()` run. Wiring example in `docs/operations.md` §7.
+
+### Added — the registry stores each anchor's SEP-31 receive limits ([#669](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/669))
+
+- The probe records the `min_amount` and `max_amount` a SEP-31 `/info` response states
+  beside each receive asset (`ProbeResult.receiveLimits`), the attester writes them
+  (`attest_receive`, `AnchorAttester.attestReceive`), and the registry stores them under a
+  new key and answers `get_receive(domain)` and `receive_limits(domain, code)`
+  (`AnchorRegistry.getReceive`, `receiveLimits`). A planner can now rule a lane out by amount
+  without calling the anchor.
+- Storage is additive. `DataKey::Receive` is appended and no existing entry changes shape:
+  a stored struct is decoded by its exact set of fields, so a field added to `AnchorMeta`
+  would have made every metadata entry written before it unreadable. Two contract tests hold
+  that in place.
+- Amounts are `Option<i128>` scaled by 10^7 and nothing is rounded. A bound that cannot be
+  written exactly (negative, more than seven decimal places, a float with more digits than
+  it keeps) is left out, and "not recorded" is never read back as zero. A minimum above the
+  maximum is stored as observed.
+- Contracts deployed before this have no such method. `pnpm attest` still writes the bitmaps
+  and the metadata, skips the limits and warns once; `getReceive` returns `null`. Upgrade the
+  registry, then the attester, to start recording. Decision 6 in `docs/registry-metadata.md`
+  has the reasoning.
 
 ### Added — AWS KMS and Google Cloud KMS `ExternalSigner`s ([#277](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/277))
 
@@ -95,6 +726,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 - Tested with fake clients that sign with a real local ed25519 key, through
   `assertSignerProducesValidSignatures`.
 
+### Added — the threat model covers the route planner ([#704](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/704))
+
+- `docs/threat-model.md` gains the trust boundary "3.4 Planner ↔ Price Sources, Route Options
+  and Lane Checks": 27 threats across the rate history, route options and lane checks, among
+  them a manipulated price source, a tampered route option and a stale lane check. Each names
+  the code on `main` that already answers it or the issue that will. The attester boundary
+  moves to 3.5, the boundary diagram shows the planner, and the actors table gains a rate
+  source.
+- The section cites code by file and symbol, not by line number, so an edit elsewhere in a
+  file does not strand a reference. `tests/threat-model-planner.test.ts` fails when a cited
+  symbol or file is gone, an issue reference has no link, or a threat is left with neither a
+  mitigation nor an issue.
+
 ### Added — one tag releases every public package ([#263](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/263))
 
 - `.github/workflows/release-packages.yml`: a `vX.Y.Z` tag runs lint, typecheck, tests
@@ -105,6 +749,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   TypeScript source (so nothing is published until #262 gives each library a `dist/`).
   `scripts/changelog-section.ts` extracts the release notes. Both are unit-tested.
 - "Releasing" checklist in `CONTRIBUTING.md`. Cutting the first tag is a maintainer action.
+
+### Added — the wave-11 plan in `ROADMAP.md` ([#708](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/708))
+
+- A new section, "Wave 11 — the smart router and the road to mainnet", in seven workstreams:
+  smart router, rate history, lane checks, onboarding, more anchors and route types, proof on
+  testnet, and mainnet steps. Its 25 items link all 127 open issues of the wave, each one once.
+- Five older open items now name the wave-11 issue that carries them forward. One open item,
+  the SCF grant proposal, has no issue in the tracker and keeps its link to the draft.
 
 ### Added — property tests for the registry contract ([#283](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/283))
 

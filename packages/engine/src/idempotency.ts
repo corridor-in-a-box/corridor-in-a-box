@@ -30,6 +30,12 @@ export interface StoredRun {
   quoteId?: string;
   quoteExpiresAt?: number;
   quoteFirm?: boolean;
+  /** Pinned receiving anchor home domain chosen for this run (#624). */
+  receivingDomain?: string;
+  /** Pinned destination protocol (`sep31`, `sep6`, `wallet`, `custom:<id>`) chosen for this run (#624). */
+  routeProtocol?: string;
+  /** Price firmness label (`locked`, `indicative`, or `estimated`) pinned for this run (#624). */
+  priceLabel?: "locked" | "indicative" | "estimated";
   settlementAmount?: string;
   stellarTxHash?: string;
   settlementKind?: "stellar" | "adapter";
@@ -65,6 +71,11 @@ export interface StoredRun {
     readonly amount: Money;
   };
   lastError?: string;
+  /**
+   * Difference between guaranteed/shown payout amount and actual anchor payout amount (RFC 0004 D4).
+   * Recorded when guaranteeEstimates is enabled.
+   */
+  estimateGap?: string;
   /**
    * Opaque tenant id that owns this run, so a read can be scoped to its creator.
    * Set by the caller from an already-VALIDATED credential — never from a
@@ -150,6 +161,9 @@ export class InMemoryIdempotencyStore implements IdempotencyStore {
       // Once a source deposit reference is written, an older or incomplete
       // run snapshot must never erase it and permit a second deposit on resume.
       sourceTransactionId: existing?.sourceTransactionId ?? run.sourceTransactionId,
+      receivingDomain: existing?.receivingDomain ?? run.receivingDomain,
+      routeProtocol: existing?.routeProtocol ?? run.routeProtocol,
+      priceLabel: existing?.priceLabel ?? run.priceLabel,
     });
   }
 

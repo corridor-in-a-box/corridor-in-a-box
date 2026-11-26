@@ -9,12 +9,56 @@
 import type { Corridor } from "@corridor/manifest";
 import type { AnchorAdapter, SourceAnchorAdapter } from "@corridor/adapter-kit";
 import type { PaymentIntent } from "@corridor/types";
+import type { AllowedPriceLabel } from "./label-policy";
 
-export interface RouteDecision {
+/**
+ * One option a resolver considered for a payment, with why it ranked where it
+ * did. Reasons are short, PII-free strings (e.g. "attested 2h ago",
+ * "p95 settle 41s"): they are written to the append-only audit trail.
+ *
+ * Deliberately not the planner's RFC 0004 `RouteOption`: this is only the part of
+ * an option the audit trail keeps about a choice.
+ */
+export interface RankedOption {
+  /** Stable id for the option, e.g. the receiving anchor's adapter name or domain. */
+  readonly id: string;
+  /**
+   * The RFC 0004 price label of the option's price: `locked` (a firm SEP-38
+   * quote), `indicative` (the anchor's current price, not promised) or
+   * `estimated` (from rate history). Omit it for an option that could not be
+   * priced. See docs/rfcs/0004-smart-router.md#2-price-labels-shown-to-people.
+   */
+  readonly label?: AllowedPriceLabel;
+  /** 1-based rank; 1 is the best option. */
+  readonly rank: number;
+  /** Why the option ranked where it did, most important first. */
+  readonly reasons: readonly string[];
+}
+
+/** How a resolver ranked its options, so the choice can be explained later. */
+export interface OptionRanking {
+  /** `id` of the option the resolver chose; it should match `receiving`. */
+  readonly chosen: string;
+  /** Every option considered, in any order; the engine audits the top three by rank. */
+  readonly options: readonly RankedOption[];
+}
+
+/**
+ * One candidate route the engine may settle through: a receiving anchor, an
+ * optional sending anchor for non-prefunded corridors, and how the choice was
+ * reached. A `RouteDecision` is one of these (the primary) plus, optionally,
+ * ordered `alternates` the engine falls back to before any funds move (RFC 0004).
+ */
+export interface RouteCandidate {
   /** The receiving anchor chosen for this payment. */
   readonly receiving: AnchorAdapter;
   /** Sending anchor used to on-ramp funds for non-prefunded corridors. */
   readonly sending?: SourceAnchorAdapter;
+  /** How the route decision was reached: verified against on-chain evidence or assumed from manifest. */
+  readonly trust: "attested" | "manifest";
+}
+
+export interface RouteDecision extends RouteCandidate {
   /**
    * Reserved for split routing across multiple anchors (weights sum to 1).
    * The engine ignores this field today and reads only `receiving`, so setting
@@ -23,6 +67,27 @@ export interface RouteDecision {
   readonly split?: ReadonlyArray<{ adapter: AnchorAdapter; weight: number }>;
   /** How the route decision was reached: verified against on-chain evidence or assumed from manifest. */
   readonly trust: "attested" | "manifest";
+  /**
+   * Optional ranking behind the choice. When present the engine records the
+   * chosen option with its price label and rank, and the top three options
+   * with their reasons, in the audit trail; when absent it records the receiving adapter as the only option.
+   * See docs/route-resolver.md#recording-the-choice.
+   */
+  readonly ranking?: OptionRanking;
+  /**
+   * Ordered fallback options tried in turn when this route fails BEFORE any
+   * funds move — a refused quote, a KYC rejection, or a transaction that cannot
+   * be opened (RFC 0004). The engine marks the failed run and starts a linked
+   * run on the next option under the key `<key>:alt1`, then `<key>:alt2`, up to
+   * the configured limit (default 2). Once a run reaches `settling` no further
+   * option is tried and a resume that would change the route is refused, so an
+   * `alternates` entry is never reached after money has left.
+   *
+   * Optional and additive: a resolver that returns a single-anchor decision
+   * (the shipped `StaticRouteResolver` and `RegistryRouteResolver`) leaves it
+   * unset, and the engine behaves exactly as before.
+   */
+  readonly alternates?: readonly RouteCandidate[];
 }
 
 /**
@@ -76,14 +141,30 @@ export {
   RegistryRouteResolver,
   UnattestedAnchorError,
   asAttestationSource,
+  checkAttestation,
   isAttestedProtocol,
   isUnattestedDomainAllowed,
+  type AttestationCheck,
+  type AttestationRefusal,
   type AttestationSource,
   type AttestationSourceLike,
   type AttestedProtocol,
   type LegacyAttestationSource,
   type RegistryResolverOptions,
 } from "./registry-resolver";
+
+// Planner step 1: corridors whose declared destination matches the request.
+export { candidates } from "./candidates";
+export type { CandidateRequest, CandidatesResult, NonMatchingCorridor } from "./candidates";
+
+// Planner step: keep only candidates the registry can vouch for, with reasons
+// for the rest. Same rules as RegistryRouteResolver, via checkAttestation.
+export {
+  filterByEvidence,
+  type EvidenceCandidate,
+  type EvidenceFilterDeps,
+  type EvidenceFilterResult,
+} from "./evidence-filter";
 
 // Deploy-time injection: load a RouteResolver module named in config (e.g.
 // CORRIDOR_RESOLVER_MODULE) instead of editing code. The module below the
@@ -98,3 +179,128 @@ export {
 
 export { createAdapterRegistry } from "./adapters";
 export type { AdapterFactory, AdapterRegistry } from "./adapters";
+
+// SEP-10 lane check: whether a receiving anchor's login accepts our own key.
+export {
+  checkLane,
+  type LaneCheckOptions,
+  type LaneCheckResult,
+  type LaneStatus,
+} from "./lane-check";
+export { appendOptionReason, formatOptionReason, summarizeOptionReasons } from "./reasons";
+export type { OptionReasonStep, ReasonedOption, SummarizedOptionReason } from "./reasons";
+export {
+  DEFAULT_PARALLEL_DEADLINE_MS,
+  formatNoPriceWithinReason,
+  priceCandidatesInParallel,
+} from "./parallel-pricer";
+export type {
+  DroppedCandidateResult,
+  ParallelPricingCandidate,
+  ParallelPricingOptions,
+  ParallelPricingResult,
+  PriceAnchorContext,
+  PriceCandidateFn,
+  PricedCandidateResult,
+} from "./parallel-pricer";
+
+export { requestLockedOption } from "./firm-quote";
+export type {
+  FirmQuoteCandidate,
+  FirmQuoteDroppedOption,
+  FirmQuoteResult,
+  LockedRouteOption,
+  RequestLockedOptionOptions,
+} from "./firm-quote";
+export { filterByCircuitBreaker } from "./breaker-filter";
+export type {
+  BreakerDroppedCandidate,
+  BreakerFilterCandidate,
+  BreakerFilterResult,
+  BreakerStateReader,
+  BreakerStatusRecord,
+} from "./breaker-filter";
+export { ALL_PRICE_LABELS, filterOptionsByAllowedLabels } from "./label-policy";
+export type {
+  AllowedPriceLabel,
+  LabelledRouteOption,
+  LabelPolicy,
+  LabelPolicyFilterResult,
+  LabelRejectedOption,
+} from "./label-policy";
+
+export { CachedCapabilitiesStore, filterByLimitsAndFields } from "./limits-filter";
+export type {
+  LimitsDroppedCandidate,
+  LimitsEligibleCandidate,
+  LimitsFilterCandidate,
+  LimitsFilterInput,
+  LimitsFilterOptions,
+  LimitsFilterResult,
+  RouteAssetCapabilities,
+  Sep31InfoCacheOptions,
+  TransactionFieldSpec,
+} from "./limits-filter";
+
+export type {
+  PriceLabel,
+  RouteOption,
+  RoutePlanner,
+  RoutePolicy,
+  RouteRequest,
+} from "./planner";
+
+export {
+  buildEstimatedOption,
+  DEFAULT_MIN_ESTIMATE_SPAN_DAYS,
+  DEFAULT_ESTIMATE_WINDOW_DAYS,
+  DEFAULT_MIN_ESTIMATE_SAMPLES,
+} from "./estimated-price";
+export type {
+  EstimatedPriceDetails,
+  EstimatedPriceDropped,
+  EstimatedPriceOffered,
+  EstimatedPriceOutcome,
+  EstimatedPricePolicy,
+  EstimatePriceRequest,
+  RateSample,
+} from "./estimated-price";
+export {
+  canonicalDecimal,
+  compareDecimals,
+  percentile,
+  percentileRank,
+  windowed,
+} from "./rate-percentile";
+export {
+  DEFAULT_ESTIMATE_MARGIN_BPS,
+  applyEstimateMargin,
+  fetchIndicativePrice,
+} from "./indicative-price";
+export type { IndicativePriceRequest, IndicativeRouteOption } from "./indicative-price";
+export { PinnedRouteResolver, UnpinnedRouteError } from "./pinned-resolver";
+export type {
+  PinnedRouteResolverOptions,
+  PinnedRunRecord,
+  PinnedRunStore,
+} from "./pinned-resolver";
+
+// RFC 0004 route-option score: run-history success rate, discounted by attestation age.
+export {
+  ATTESTATION_PENALTY_LEDGERS,
+  MIN_RELIABILITY_RUNS,
+  RELIABILITY_WINDOW_MS,
+  reliability,
+} from "./reliability";
+export type {
+  ReliabilityAttestationSource,
+  ReliabilityDeps,
+  ReliabilityRun,
+  ReliabilityRunOutcome,
+  ReliabilityRunStore,
+} from "./reliability";
+
+// RFC 0004 ranking: cautious recipient amount per label, then reliability,
+// then speed, then domain. Pure and deterministic.
+export { rank, cautiousRecipientAmount } from "./rank";
+export type { RankableOption, RankOptions } from "./rank";

@@ -11,18 +11,21 @@ import {
   fail,
   isSettleableAmount,
   ok,
+  subAmounts,
   type CorridorError,
   type Money,
   type Outcome,
   type PaymentIntent,
 } from "@corridor/types";
-import type { RouteDecision, RouteResolver } from "@corridor/router";
+import type { RouteCandidate, RouteDecision, RouteResolver } from "@corridor/router";
+import { routeChoiceFor } from "./route-choice";
 import {
   AdapterQuoteProvider,
   ExternalQuoteProvider,
   toLegacy,
   type ExternalQuoteFn,
   type OpenTransaction,
+  type Quote,
   type QuoteProvider,
 } from "@corridor/adapter-kit";
 import { canTransition, isTerminal, type CorridorState } from "./state";
@@ -73,6 +76,7 @@ import {
   type Logger,
   type Metrics,
   type RequestScope,
+  type RouteChoice,
 } from "./observability";
 import type { CheckResult, GateContext, PreSettleGate } from "./gate";
 import {
@@ -162,6 +166,26 @@ export interface EngineDeps {
    * evaluation while recording `gate.skipped` in the audit log and emitting a warning.
    */
   unsafeSkipPreSettleGate?: boolean;
+  /**
+   * Maximum number of alternate routes the engine tries when the primary route
+   * fails before any funds move (a refused quote, a KYC rejection, or a
+   * transaction that cannot be opened). Each alternate starts a linked run
+   * under `<key>:alt1`, then `<key>:alt2`, up to this limit; see RFC 0004.
+   *
+   * Defaults to `2`. `0` disables fallback entirely (the engine behaves as
+   * before this change). The alternates themselves come from
+   * `RouteDecision.alternates`; a resolver that returns a single-anchor
+   * decision leaves the list empty, so this bound only matters when a resolver
+   * actually offers alternatives. Once a run reaches `settling` no further
+   * option is tried.
+   */
+  maxAlternates?: number;
+  /**
+   * When true, the business guarantees estimated prices to the customer and absorbs
+   * rate differences between the guaranteed amount and anchor payout (RFC 0004 D4).
+   * Default setting for runs executed with these deps.
+   */
+  guaranteeEstimates?: boolean;
 }
 
 export interface RunResult {
@@ -173,6 +197,11 @@ export interface RunResult {
   readonly settlementRef?: SettlementRef;
   /** Ordered list of states the run passed through — useful for the example/CLI. */
   readonly trail: readonly CorridorState[];
+  /**
+   * Difference between guaranteed/shown payout and actual anchor payout (RFC 0004 D4).
+   * Recorded when guaranteeEstimates is on. Positive = gain, negative = loss, zero = exact match.
+   */
+  readonly estimateGap?: string;
 }
 
 export interface ExecuteOptions {
@@ -188,6 +217,15 @@ export interface ExecuteOptions {
    * on-chain attestation.
    */
   trustManifestWithoutAttestation?: boolean;
+  /**
+   * Pre-obtained caller quote (e.g. a locked option presented to the sender).
+   * When present, the engine honours it instead of fetching a fresh quote, and
+   * refuses an expired firm quote (`QUOTE_EXPIRED`) rather than re-quoting at
+   * a different rate. A quote for a different source asset or amount than the
+   * intent is refused too (`QUOTE_UNAVAILABLE`, not retryable). The transition
+   * into `quoted` records `quoteSupplied: true` in the audit trail (#622).
+   */
+  quote?: Quote;
   /**
    * Run quote → comply → open → pre-settle gate against the real anchor, then
    * stop before `settling`: `SettlementSubmitter.submit()` (and `findExisting`)
@@ -215,6 +253,18 @@ export interface ExecuteOptions {
    * job — this only keeps the ids correlatable until it is.
    */
   traceparent?: string;
+  /**
+   * When true, guarantee estimated prices and record estimateGap on the run (RFC 0004 D4).
+   */
+  guaranteeEstimates?: boolean;
+  /**
+   * Explicit guaranteed payout amount shown to customer. Defaults to the quote's destAmount.
+   */
+  guaranteedAmount?: string | Money;
+  /**
+   * Explicit actual payout amount delivered by anchor, overriding TransactionStatus.amountOut.
+   */
+  actualAmount?: string | Money;
 }
 
 /** The `cause` of a `DRY_RUN_COMPLETE` error: what the gate said before the run stopped. */
@@ -275,11 +325,102 @@ function makeRecordOutcome(
   };
 }
 
+/** Alternates tried when a resolver offers them and `maxAlternates` is unset. */
+const DEFAULT_MAX_ALTERNATES = 2;
+
+/**
+ * Mutable state shared by the fallback wrapper and one attempt's run body.
+ * `from` is the link this run records back to the attempt that failed before it;
+ * `to` is the candidate link forward, stamped only when the run fails before any
+ * funds move. `reachedSettling` is the hard stop: once set, no forward link can
+ * be recorded (RFC 0004).
+ */
+interface AttemptFallback {
+  readonly from?: string;
+  to?: string;
+  reachedSettling: boolean;
+  fellBack: boolean;
+}
+
+/** What the run body reports back about the decision it resolved. */
+interface AttemptInfo {
+  alternates: readonly RouteCandidate[];
+  nextOption?: RouteCandidate;
+}
+
+interface AttemptContext {
+  readonly baseKey: string;
+  readonly index: number;
+  readonly limit: number;
+  /** Pre-resolved option for an alternate; the primary resolves via the resolver. */
+  readonly option?: RouteCandidate;
+  readonly info: AttemptInfo;
+  readonly fallback: AttemptFallback;
+}
+
+/**
+ * Execute a payment, falling back to the next route option when an attempt fails
+ * before any funds move (RFC 0004). The primary run keeps the caller's key; each
+ * alternate starts a linked run under `<key>:alt1`, `<key>:alt2`, up to
+ * `deps.maxAlternates` (default 2, `0` disables fallback). A failure after the
+ * run reached `settling` is returned as-is: once settlement starts, the route is
+ * pinned and no alternate is tried.
+ */
 export async function execute(
   intent: PaymentIntent,
   corridor: Corridor,
   depsIn: EngineDeps,
   opts: ExecuteOptions = {},
+): Promise<Outcome<RunResult>> {
+  const requested = depsIn.maxAlternates ?? DEFAULT_MAX_ALTERNATES;
+  const limit = Number.isFinite(requested)
+    ? Math.max(0, Math.trunc(requested))
+    : DEFAULT_MAX_ALTERNATES;
+
+  let index = 0;
+  let key = intent.idempotencyKey;
+  let option: RouteCandidate | undefined;
+  let alternates: readonly RouteCandidate[] = [];
+  let fallbackFrom: string | undefined;
+
+  for (;;) {
+    const attemptIntent = index === 0 ? intent : { ...intent, idempotencyKey: key };
+    const info: AttemptInfo = { alternates };
+    const fallback: AttemptFallback = {
+      ...(fallbackFrom && { from: fallbackFrom }),
+      reachedSettling: false,
+      fellBack: false,
+    };
+    const outcome = await runAttempt(attemptIntent, corridor, depsIn, opts, {
+      baseKey: intent.idempotencyKey,
+      index,
+      limit,
+      ...(option && { option }),
+      info,
+      fallback,
+    });
+    if (outcome.ok) return outcome;
+
+    // `fellBack` is only set when the failed transition carried `fallbackTo`,
+    // which failRun does solely for a pre-settle failure with no source deposit
+    // and no settle: a post-settle failure leaves it false and stops here.
+    const next = info.nextOption;
+    if (!next || !fallback.fellBack) return outcome;
+
+    fallbackFrom = key;
+    option = next;
+    alternates = info.alternates;
+    index += 1;
+    key = `${intent.idempotencyKey}:alt${index}`;
+  }
+}
+
+async function runAttempt(
+  intent: PaymentIntent,
+  corridor: Corridor,
+  depsIn: EngineDeps,
+  opts: ExecuteOptions,
+  plan: AttemptContext,
 ): Promise<Outcome<RunResult>> {
   // One request, one scope: when the caller names the request that started this
   // run, every log line and audit entry below inherits that id — including the
@@ -298,12 +439,6 @@ export async function execute(
   const metrics = deps.metrics ?? noopMetrics;
   const startedAt = now();
 
-  // Wrap once, here, so every trip and reset is counted even when the embedding
-  // application never met the meter. An already-metered store is left alone so
-  // that an app which wired the meter itself does not double-count.
-  const health = meteredHealth(deps);
-  const recordOutcome = makeRecordOutcome(deps, corridor, health, now);
-
   // Time a verb call and emit a `corridor.verb.<name>` histogram sample.
   const timed = async <T>(name: string, fn: () => Promise<T>): Promise<T> => {
     const begin = now();
@@ -311,6 +446,12 @@ export async function execute(
     metrics.timing(`corridor.verb.${name}`, now() - begin, { corridor: corridor.id });
     return r;
   };
+
+  // Wrap once, here, so every trip and reset is counted even when the embedding
+  // application never met the meter. An already-metered store is left alone so
+  // that an app which wired the meter itself does not double-count.
+  const health = meteredHealth(deps);
+  const recordOutcome = makeRecordOutcome(deps, corridor, health, now);
 
   // --- configuration guard: pre-settle gate is mandatory by default.
   // Fail closed before claiming idempotency key (no run row persisted) unless
@@ -476,13 +617,24 @@ export async function execute(
   // --- pick the receiving anchor ---------------------------------------
   // The key is already claimed, so a refusal must still finish the run: left in
   // `created` it would answer every retry with IDEMPOTENCY_CONFLICT forever.
-  const routed = await resolveRoute(deps.resolver, intent, corridor);
+  const routed: Outcome<RouteDecision> = plan.option
+    ? ok({ ...plan.option })
+    : await resolveRoute(deps.resolver, intent, corridor);
   if (!routed.ok) {
-    return failRun({ run, trail, deps, store, now, recordOutcome }, routed.error);
+    return failRun(
+      { run, trail, deps, store, now, recordOutcome, fallback: plan.fallback },
+      routed.error,
+    );
   }
   const route = routed.value;
   const routeTrust = route.trust;
   const adapter = route.receiving;
+  // Alternates belong to the primary decision; an alternate attempt reuses the
+  // ordered list, so `<key>:alt2` is option 2 of that same decision.
+  if (!plan.option) plan.info.alternates = route.alternates ?? [];
+  plan.info.nextOption =
+    plan.index < plan.limit ? plan.info.alternates[plan.index] : undefined;
+  plan.fallback.to = plan.info.nextOption ? `${plan.baseKey}:alt${plan.index + 1}` : undefined;
   const context = createRunContext({
     run,
     trail,
@@ -494,9 +646,17 @@ export async function execute(
     pollMs,
     adapter,
     routeTrust,
+    routeDecision: route,
     recordOutcome,
+    fallback: plan.fallback,
   });
   const { advance, die, finishFailure } = context;
+
+  // Pin the resolved receiving domain and protocol on the run record (#624) so
+  // restarts and readers agree on which route was chosen, and a resume that has
+  // reached `settling` can refuse a re-route (RFC 0004).
+  run.receivingDomain = corridor.dest.endpoints.home_domain;
+  run.routeProtocol = corridor.dest.protocol;
 
   const strategies = deps.strategies ?? defaultStrategies(deps.submitter, adapter);
   const caps = adapter.capabilities();
@@ -562,14 +722,34 @@ export async function execute(
   }
 
   // --- 1. quote ---------------------------------------------------------
-  const q = await timed("quote", () => quote(adapter, intent, corridor, now(), provider));
+  const quoteSupplied = opts.quote !== undefined;
+  const q = await timed("quote", () =>
+    quote(adapter, intent, corridor, now(), provider, opts.quote),
+  );
   if (!q.ok) return die(q.error);
+  if (quoteSupplied) {
+    (deps.logger ?? silentLogger).log("info", "corridor.quote.supplied", {
+      idempotencyKey: run.idempotencyKey,
+      corridorId: corridor.id,
+      quoteId: q.value.id,
+    });
+  }
   run.quoteId = q.value.id;
   run.quoteExpiresAt = q.value.expiresAt;
   run.quoteFirm = q.value.firm;
+  run.priceLabel = q.value.firm ? "locked" : "indicative";
   run.settlementAmount = q.value.sourceAmount.amount;
+
+  const guaranteeEstimates = Boolean(opts.guaranteeEstimates ?? deps.guaranteeEstimates);
+  let guaranteedAmountStr: string | undefined;
+  if (guaranteeEstimates) {
+    guaranteedAmountStr =
+      typeof opts.guaranteedAmount === "string"
+        ? opts.guaranteedAmount
+        : (opts.guaranteedAmount?.amount ?? q.value.destAmount?.amount);
+  }
   {
-    const t = await advance("quoted");
+    const t = await advance("quoted", quoteSupplied ? { quoteSupplied: true } : undefined);
     if (!t.ok) return die(t.error);
   }
 
@@ -857,6 +1037,22 @@ export async function execute(
       }),
     );
     if (!r.ok) return finishFailure(r.error);
+
+    if (guaranteeEstimates && guaranteedAmountStr) {
+      const actualAmount =
+        (typeof opts.actualAmount === "string"
+          ? opts.actualAmount
+          : opts.actualAmount?.amount) ??
+        r.value.amountOut?.amount ??
+        opened.value.amountOut?.amount;
+      if (actualAmount !== undefined) {
+        const diff = subAmounts(actualAmount, guaranteedAmountStr);
+        if (diff.ok) {
+          run.estimateGap = diff.value;
+        }
+      }
+    }
+
     {
       const t = await advance("reconciled");
       if (!t.ok) return die(t.error);
@@ -952,6 +1148,10 @@ interface AdvanceMeta {
   amountRefunded?: string;
   amountFee?: string;
   checks?: readonly CheckResult[];
+  /** The run's quote came from `ExecuteOptions.quote` instead of the anchor (#622). */
+  quoteSupplied?: boolean;
+  /** Set by `advance` itself on the first transition out of `created`. */
+  route?: RouteChoice;
 }
 
 interface RunContext {
@@ -985,8 +1185,17 @@ interface RunContextInit {
   /** Receiving-anchor adapter, used to watch an anchor-driven refund. */
   adapter: AnchorAdapter;
   routeTrust?: "attested" | "manifest";
+  /**
+   * The route decision whose choice is recorded once, on the run's first
+   * transition out of `created` (a resumed run that already left `created`
+   * never re-records it). Turned into a `RouteChoice` at that moment, so the
+   * chosen option can fall back to the run's own quote label.
+   */
+  routeDecision?: RouteDecision;
   /** Reports a resolved run to the circuit breaker (no-op without `deps.health`). */
   recordOutcome: RecordOutcome;
+  /** Route-fallback links and the settle guard (RFC 0004). */
+  fallback?: AttemptFallback;
 }
 
 /**
@@ -1005,7 +1214,9 @@ function createRunContext(init: RunContextInit): RunContext {
     pollMs,
     adapter,
     routeTrust,
+    routeDecision,
     recordOutcome,
+    fallback,
   } = init;
 
   // The gate's results, recorded on the way into `verifying` and carried again
@@ -1018,15 +1229,23 @@ function createRunContext(init: RunContextInit): RunContext {
       return fail("SETTLEMENT_FAILED", `illegal transition ${run.state} -> ${to}`);
     }
     const from = run.state;
+    // Once settlement starts the route is pinned: a later failure must never
+    // record a forward fallback link (RFC 0004).
+    if (to === "settling" && fallback) fallback.reachedSettling = true;
     if (to === "verifying") gateChecks = meta?.checks;
     else if (from === "verifying" && gateChecks && !meta?.checks) {
       meta = { ...meta, checks: gateChecks };
+    }
+    if (from === "created" && routeDecision) {
+      meta = { ...meta, route: routeChoiceFor(routeDecision, run.priceLabel) };
     }
     run.state = to;
     run.version += 1;
     trail.push(to);
     await store.put(run);
-    await emitTransition(deps, run, from, now(), undefined, routeTrust, meta);
+    await emitTransition(deps, run, from, now(), undefined, routeTrust, meta, {
+      ...(run.version === 1 && fallback?.from && { fallbackFrom: fallback.from }),
+    });
     return ok(undefined);
   };
 
@@ -1173,19 +1392,45 @@ function createRunContext(init: RunContextInit): RunContext {
 async function failRun(
   init: Pick<
     RunContextInit,
-    "run" | "trail" | "deps" | "store" | "now" | "routeTrust" | "recordOutcome"
+    | "run"
+    | "trail"
+    | "deps"
+    | "store"
+    | "now"
+    | "routeTrust"
+    | "recordOutcome"
+    | "fallback"
+    | "routeDecision"
   >,
   error: CorridorError,
   checks?: readonly CheckResult[],
 ): Promise<Err> {
-  const { run, trail, deps, store, now, routeTrust, recordOutcome } = init;
+  const { run, trail, deps, store, now, routeTrust, routeDecision, recordOutcome, fallback } =
+    init;
   if (!canTransition(run.state, "failed")) return { ok: false, error };
   const from = run.state;
+  const route =
+    from === "created" && routeDecision
+      ? routeChoiceFor(routeDecision, run.priceLabel)
+      : undefined;
   run.lastError = `${error.code}: ${error.message}`;
   run.state = "failed";
   run.version += 1;
   trail.push("failed");
   await store.put(run);
+  // Only a failure that happened before any funds moved may point at a
+  // successor. `reachedSettling` covers the settle-and-after window;
+  // `sourceTransactionId` covers source funding, where money already left the
+  // operator's treasury even though the destination never settled. A dry run
+  // stopping on purpose is not a route failure either.
+  const fallbackTo =
+    fallback?.to &&
+    !fallback.reachedSettling &&
+    !run.sourceTransactionId &&
+    error.code !== "DRY_RUN_COMPLETE"
+      ? fallback.to
+      : undefined;
+  if (fallbackTo && fallback) fallback.fellBack = true;
   await emitTransition(
     deps,
     run,
@@ -1193,7 +1438,11 @@ async function failRun(
     now(),
     run.lastError,
     routeTrust,
-    checks ? { checks } : undefined,
+    checks || route ? { ...(checks && { checks }), ...(route && { route }) } : undefined,
+    {
+      ...(run.version === 1 && fallback?.from && { fallbackFrom: fallback.from }),
+      ...(fallbackTo && { fallbackTo }),
+    },
   );
   await recordOutcome("failed", error);
   return { ok: false, error };
@@ -1230,6 +1479,7 @@ function toResult(run: StoredRun, trail: readonly CorridorState[]): RunResult {
     settlementKind: run.settlementKind,
     settlementRef: run.settlementRef,
     trail,
+    ...(run.estimateGap !== undefined ? { estimateGap: run.estimateGap } : {}),
   };
 }
 
@@ -1270,7 +1520,10 @@ async function emitTransition(
     amountRefunded?: string;
     amountFee?: string;
     checks?: readonly CheckResult[];
+    quoteSupplied?: boolean;
+    route?: RouteChoice;
   },
+  links?: { fallbackFrom?: string; fallbackTo?: string },
 ): Promise<void> {
   const entry: AuditEntry = {
     idempotencyKey: run.idempotencyKey,
@@ -1281,12 +1534,16 @@ async function emitTransition(
     at,
     ...(error && { error }),
     ...(routeTrust && { routeTrust }),
+    ...(links?.fallbackFrom && { fallbackFrom: links.fallbackFrom }),
+    ...(links?.fallbackTo && { fallbackTo: links.fallbackTo }),
     ...(meta?.quoteFee && { quoteFee: meta.quoteFee }),
     ...(meta?.networkFee && { networkFee: meta.networkFee }),
     ...(meta?.amountRefunded !== undefined && { amountRefunded: meta.amountRefunded }),
     ...(meta?.amountFee !== undefined && { amountFee: meta.amountFee }),
+    ...(meta?.quoteSupplied && { quoteSupplied: true }),
     // A copy, so a caller mutating its array afterwards cannot change what was recorded.
     ...(meta?.checks && meta.checks.length > 0 && { checks: [...meta.checks] }),
+    ...(meta?.route && { route: meta.route }),
   };
   const logger = deps.logger ?? silentLogger;
   // One line per check, logged once when the results arrive; the transition
@@ -1371,6 +1628,34 @@ async function resumeRun(
     return routed;
   }
   const route = routed.value;
+
+  // --- route pinning: never switch routes once settlement has started ------
+  // The run recorded the receiving domain it opened with (#624). A resume that
+  // resolves to a different receiving domain after `settling` would reconcile
+  // against the wrong anchor (or worse, settle a second time somewhere else), so
+  // it is refused and the stored row is left untouched and resumable. Legacy
+  // rows without the field keep their old behaviour. See RFC 0004.
+  const resolvedDomain = corridor.dest.endpoints.home_domain;
+  if (
+    run.receivingDomain !== undefined &&
+    run.receivingDomain !== resolvedDomain &&
+    hasReachedSettling(run.state)
+  ) {
+    (deps.logger ?? silentLogger).log("warn", "corridor.route.pinned", {
+      idempotencyKey: run.idempotencyKey,
+      corridorId: corridor.id,
+      state: run.state,
+      openedWith: run.receivingDomain,
+      resolvedNow: resolvedDomain,
+    });
+    return fail(
+      "ROUTE_PINNED",
+      `idempotencyKey ${run.idempotencyKey} reached ${run.state} at receiving domain ${run.receivingDomain}; ` +
+        `resolver now returns ${resolvedDomain}, and a run cannot change route once settlement has started`,
+      { retryable: false },
+    );
+  }
+
   const context = createRunContext({
     run,
     trail,
@@ -1382,6 +1667,7 @@ async function resumeRun(
     pollMs,
     adapter: route.receiving,
     routeTrust: route.trust,
+    routeDecision: route,
     recordOutcome,
   });
 
@@ -1713,6 +1999,27 @@ async function resumeRun(
   }
 
   return conflict("state is not supported by the resume handler");
+}
+
+/**
+ * States from which the run has (or may have) submitted settlement. The route
+ * is pinned from the first `settling` entry onward, including `retrying`, which
+ * is only reachable from `settling`. See RFC 0004.
+ */
+const AT_OR_AFTER_SETTLING: ReadonlySet<CorridorState> = new Set<CorridorState>([
+  "settling",
+  "retrying",
+  "settled",
+  "reconciled",
+  "completed",
+  "recovering",
+  "refund_pending",
+  "refunded",
+  "held",
+]);
+
+function hasReachedSettling(state: CorridorState): boolean {
+  return AT_OR_AFTER_SETTLING.has(state);
 }
 
 function externalStallBudgetMs(corridor: Corridor): number {
