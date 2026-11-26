@@ -644,6 +644,41 @@ switch is `execute(intent, corridor, deps, { dryRun: true })` in code and
   `pending_sender` until then.
 - `--dry-run` cannot be combined with `--write`: a dry run earns no proof.
 
+### `corridor routes` — what the planner would offer, without paying
+
+```bash
+corridor routes --amount 100 --to NGN --country NG [--from USDC] [--payout-method <m>] \
+  [--labels locked,indicative,estimated] [--margin-bps 50] [--window-days 7] \
+  [--guarantee-estimates] [--network testnet|public] [--dir corridors] [--offline] [--json]
+```
+
+Runs the RFC 0004 planner (`planRoutes` in `@corridor/router`, the same code
+`POST /routes` serves) over every manifest in `--dir` and prints the offered
+options best first, each with its price label, rate, what the recipient gets,
+reliability and reasons, then every matching corridor that was dropped and why.
+No transaction is opened and no quote is accepted. `--to NGN` means
+`iso4217:NGN`; `--from` defaults to `USDC`.
+
+- **Evidence**: the AnchorRegistry for `--network` (default `testnet`) from
+  `contracts/deployments.json`, with the `SOROBAN_RPC_URL` and
+  `REGISTRY_CONTRACT_ID` overrides. With no registry on that network the
+  command exits `1` without planning: an anchor is never offered without
+  evidence.
+- **Prices**: `indicative` from each anchor's SEP-38 `GET /price`; `estimated`
+  from rate history in Postgres when `DATABASE_URL` is set. `locked` needs an
+  authenticated SEP-38 quote adapter, which this command does not wire, so it
+  is always dropped with that reason. A label without a source is dropped with
+  the reason; no price is made up.
+- **`--offline`**: no anchor is contacted. Only the manifests, the registry and
+  the local rate history are read, so the only label an offline plan can show
+  is `estimated`.
+- `--payout-method` is carried in the request; no planner step filters on it yet.
+- Not applied here: the lane breaker and this business's run history, so every
+  anchor's reliability is the no-history score discounted by attestation age.
+
+**Exit codes:** `0` at least one route offered, `1` none offered (or no
+registry, or planning failed), `2` bad arguments.
+
 ## 2. Recovering a stuck payment
 
 The engine drives recovery automatically per the manifest's `recovery.rollback`

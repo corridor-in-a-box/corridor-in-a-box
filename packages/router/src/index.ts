@@ -310,3 +310,15 @@ export type { RankableOption, RankOptions } from "./rank";
 // anchor may carry an `estimated` price at all (RFC 0004 §3).
 export { assessRateHistory } from "./rate-history";
 export type { EstimateAssessment, EstimateThresholds } from "./rate-history";
+
+// The RFC 0004 planner composed from the blocks above: served by
+// @corridor/service as POST /routes and run by the CLI as `corridor routes`.
+export { planRoutes } from "./plan-routes";
+export type {
+  DroppedRoute,
+  PlannedRouteOption,
+  RateHistorySource,
+  RoutePlan,
+  RoutePlanningContext,
+  RoutePlanningOptions,
+} from "./plan-routes";

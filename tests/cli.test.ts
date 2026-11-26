@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { InMemoryIdempotencyStore } from "@corridor/engine";
 import type { BreakerRecord, RunResult, SettlementRequest } from "@corridor/engine";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { liveness, loadCorridor, type Corridor } from "@corridor/manifest";
+import { liveness, loadCorridor, parseCorridor, type Corridor } from "@corridor/manifest";
 import { ok } from "@corridor/types";
 import type { SettlementFacts } from "@corridor/stellar";
 import { finalizeCanary, type PaymentVerifier } from "../packages/cli/src/proof";
@@ -29,6 +29,16 @@ import {
   isPlaceholderDomain,
   lintCorridor,
 } from "../packages/cli/src/lint";
+import {
+  formatRoutes,
+  parseRoutesArgs,
+  planCliRoutes,
+  rateHistoryFrom,
+  registryFor,
+  toDestAsset,
+  type RoutesArgs,
+} from "../packages/cli/src/routes";
+import type { AttestationSource } from "@corridor/router";
 
 // packages/cli/src/index.ts calls process.exit(main(...)) at module top level
 // and has no vitest path alias, so importing it directly would kill the test
@@ -1103,5 +1113,384 @@ describe("corridor lint", () => {
     const r = run(["lint"]);
     expect(r.status).toBe(2);
     expect(r.stderr).toContain("usage: corridor lint <file.corridor.yaml>");
+  });
+});
+
+describe("corridor routes (#619)", () => {
+  describe("argument validation (spawned CLI, no network)", () => {
+    it("exits 2 when --amount is missing", () => {
+      const r = run(["routes", "--to", "NGN", "--country", "NG"]);
+      expect(r.status).toBe(2);
+      expect(r.stderr).toContain("--amount <amount> is required");
+    });
+
+    it("exits 2 on an amount that is not a positive decimal", () => {
+      for (const amount of ["abc", "0", "-5", "1e3"]) {
+        const r = run(["routes", "--amount", amount, "--to", "NGN", "--country", "NG"]);
+        expect(r.status).toBe(2);
+        expect(r.stderr).toContain("positive decimal amount");
+      }
+    });
+
+    it("exits 2 on an unknown option, a stray argument or a bad --network", () => {
+      const base = ["routes", "--amount", "100", "--to", "NGN", "--country", "NG"];
+      expect(run([...base, "--unknown-flag"]).stderr).toContain(
+        'unknown option "--unknown-flag"',
+      );
+      expect(run([...base, "extra"]).status).toBe(2);
+      const bad = run([...base, "--network", "mainnet"]);
+      expect(bad.status).toBe(2);
+      expect(bad.stderr).toContain('--network must be "testnet" or "public"');
+    });
+
+    it("exits 2 when --offline is asked for a label only an anchor can give", () => {
+      const r = run([
+        "routes",
+        "--amount",
+        "100",
+        "--to",
+        "NGN",
+        "--country",
+        "NG",
+        "--offline",
+        "--labels",
+        "locked",
+      ]);
+      expect(r.status).toBe(2);
+      expect(r.stderr).toContain("--offline contacts no anchor");
+    });
+
+    it("exits 1 without planning when --network has no registry", () => {
+      // contracts/deployments.json has no public registry yet; the planner never
+      // offers an anchor without evidence, so there is nothing to plan with.
+      const r = run(
+        ["routes", "--amount", "100", "--to", "NGN", "--country", "NG", "--network", "public"],
+        { REGISTRY_CONTRACT_ID: "" },
+      );
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain("no registry deployed on public");
+    });
+  });
+
+  describe("parseRoutesArgs", () => {
+    it("builds the RFC 0004 RouteRequest, with testnet and ./corridors by default", () => {
+      const r = parseRoutesArgs(["--amount", "100", "--to", "NGN", "--country", "ng"]);
+      expect(r).toEqual({
+        ok: true,
+        value: {
+          request: {
+            sourceAmount: { asset: "USDC", amount: "100" },
+            destAsset: "iso4217:NGN",
+            destCountry: "NG",
+          },
+          network: "testnet",
+          dir: "corridors",
+          offline: false,
+          json: false,
+        },
+      });
+    });
+
+    it("maps the payout method and policy flags onto the request", () => {
+      const r = parseRoutesArgs([
+        "--amount=50.5",
+        "--from",
+        "USDC",
+        "--to",
+        "iso4217:KES",
+        "--country",
+        "KE",
+        "--payout-method",
+        "mobile_money",
+        "--labels",
+        "locked,indicative",
+        "--margin-bps",
+        "75",
+        "--window-days",
+        "14",
+        "--guarantee-estimates",
+        "--network",
+        "public",
+        "--dir",
+        "x",
+        "--json",
+      ]);
+      expect(r.ok && r.value.request).toEqual({
+        sourceAmount: { asset: "USDC", amount: "50.5" },
+        destAsset: "iso4217:KES",
+        destCountry: "KE",
+        payoutMethod: "mobile_money",
+        policy: {
+          allowedLabels: ["locked", "indicative"],
+          estimateMarginBps: 75,
+          estimateWindowDays: 14,
+          guaranteeEstimates: true,
+        },
+      });
+      expect(r.ok && [r.value.network, r.value.dir, r.value.json]).toEqual([
+        "public",
+        "x",
+        true,
+      ]);
+    });
+
+    it("refuses labels, margins and windows POST /routes would refuse", () => {
+      const base = ["--amount", "1", "--to", "NGN", "--country", "NG"];
+      for (const extra of [
+        ["--labels", "firm"],
+        ["--labels", "locked,locked"],
+        ["--margin-bps", "10000"],
+        ["--margin-bps", "1.5"],
+        ["--window-days", "0"],
+        ["--window-days", "91"],
+        ["--country", "NGA"],
+      ]) {
+        expect(parseRoutesArgs([...base, ...extra]).ok).toBe(false);
+      }
+    });
+
+    it("reads a bare currency code as its SEP-38 iso4217 asset and keeps anything else", () => {
+      expect(toDestAsset("ngn")).toBe("iso4217:NGN");
+      expect(toDestAsset("iso4217:NGN")).toBe("iso4217:NGN");
+      expect(toDestAsset("stellar:USDC:GABC")).toBe("stellar:USDC:GABC");
+    });
+  });
+
+  describe("planning (planRoutes with injected registry, fetch and rate history)", () => {
+    const NOW = Date.parse("2026-11-20T00:00:00Z");
+
+    /** A proven NGN lane to `domain`, on testnet. */
+    function lane(
+      id: string,
+      domain: string,
+      endpoints: Record<string, string> = {},
+    ): Corridor {
+      const r = parseCorridor({
+        id,
+        source: { name: "S", asset: "USDC", endpoints: { home_domain: "s.example" } },
+        dest: {
+          name: id,
+          asset: "iso4217:NGN",
+          endpoints: {
+            home_domain: domain,
+            transfer_server_sep31: `https://${domain}/sep31`,
+            endpoints_verified_at: "1970-01-01",
+            ...endpoints,
+          },
+        },
+        fx: { path: ["USDC", "NGN"], who_holds_risk: "receiving_anchor" },
+        compliance: { source_jurisdiction: "US", dest_jurisdiction: "NG" },
+        settlement: { network: "testnet", asset_issuer: "GISSUER" },
+        recovery: {},
+        proof: {
+          canary_completed_at: "1970-01-01T00:00:00Z",
+          stellar_tx_hash: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+          anchor_transaction_id: "canary-test",
+          amount: "1",
+          max_age_days: 50000,
+        },
+      });
+      if (!r.ok) throw new Error(`fixture ${id} invalid: ${r.error.message}`);
+      return r.value;
+    }
+
+    /** Registry fake: only `attested` domains serve; every attestation is fresh. */
+    function registry(attested: readonly string[]): AttestationSource {
+      return {
+        serves: async (domain) => attested.includes(domain),
+        staleness: async () => 0,
+        tomlHash: async () => "hash",
+      };
+    }
+
+    /** SEP-38 GET /price fake: 100 USDC buys the amount set for the quote server's host. */
+    function priceFeed(byHost: Record<string, string>, asked: string[]) {
+      return vi.fn(async (url: string | URL | Request) => {
+        const u = new URL(String(url));
+        asked.push(u.toString());
+        const buy = byHost[u.host];
+        if (!buy) return new Response("{}", { status: 404 });
+        return new Response(JSON.stringify({ sell_amount: "100", buy_amount: buy }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as unknown as typeof fetch;
+    }
+
+    /** 120 samples at `rate`, one every 96 minutes back from NOW: 8 days of history. */
+    function history(rate: string) {
+      return Array.from({ length: 120 }, (_, i) => ({
+        rate,
+        sampledAt: NOW - i * 96 * 60_000,
+        outlier: false,
+      }));
+    }
+
+    const corridors = [
+      lane("lane-a", "a.example", { quote_server: "https://a.example/sep38" }),
+      lane("lane-b", "b.example", { quote_server: "https://b.example/sep38" }),
+      lane("lane-c", "c.example"),
+      lane("lane-u", "u.example", { quote_server: "https://u.example/sep38" }),
+    ];
+
+    function args(argv: string[] = []): RoutesArgs {
+      const r = parseRoutesArgs([
+        "--amount",
+        "100",
+        "--to",
+        "NGN",
+        "--country",
+        "NG",
+        ...argv,
+      ]);
+      if (!r.ok) throw new Error(r.error);
+      return r.value;
+    }
+
+    it("live: offers indicative prices from SEP-38 GET /price, best recipient amount first, and says why the rest were dropped", async () => {
+      const asked: string[] = [];
+      const plan = await planCliRoutes(args(), corridors, {
+        registry: registry(["a.example", "b.example", "c.example"]),
+        fetch: priceFeed({ "a.example": "150000", "b.example": "152000" }, asked),
+        now: () => NOW,
+      });
+
+      expect(plan.offered.map((o) => [o.receivingDomain, o.price.label])).toEqual([
+        ["b.example", "indicative"],
+        ["a.example", "indicative"],
+      ]);
+      const best = plan.offered[0]!;
+      expect(best.recipientGets).toEqual({ asset: "iso4217:NGN", amount: "152000" });
+      expect(best.price.rate).toBe("1520");
+      expect(best.reliability).toBeGreaterThan(0);
+      expect(best.reasons[0]).toBe("ranked 1 of 2");
+
+      const dropped = Object.fromEntries(plan.dropped.map((d) => [d.corridorId, d.reason]));
+      // No quote server and no rate history: every label is dropped with its reason.
+      expect(dropped["lane-c"]).toContain("locked: no quote adapter configured");
+      expect(dropped["lane-c"]).toContain(
+        "indicative: no SEP-38 quote server in the manifest",
+      );
+      expect(dropped["lane-c"]).toContain("estimated: no rate history configured");
+      // Not attested: never priced.
+      expect(dropped["lane-u"]).toBeDefined();
+      expect(asked.some((u) => u.includes("u.example"))).toBe(false);
+      expect(asked.every((u) => u.includes("/sep38/price?"))).toBe(true);
+    });
+
+    it("live: an estimated price comes from rate history, never from nothing", async () => {
+      const plan = await planCliRoutes(args(["--labels", "estimated"]), corridors, {
+        registry: registry(["c.example"]),
+        rateHistory: rateHistoryFrom({ list: async () => history("1500") }),
+        now: () => NOW,
+      });
+      expect(plan.offered).toHaveLength(1);
+      expect(plan.offered[0]).toMatchObject({
+        receivingDomain: "c.example",
+        price: { label: "estimated" },
+        recipientGets: { asset: "iso4217:NGN" },
+      });
+      expect(plan.offered[0]!.reasons).toContain("estimate not guaranteed");
+    });
+
+    it("--offline contacts no anchor: only estimated prices, from local rate history", async () => {
+      const fetchSpy = vi.fn() as unknown as typeof fetch;
+      const plan = await planCliRoutes(args(["--offline"]), corridors, {
+        registry: registry(["a.example", "c.example"]),
+        fetch: fetchSpy,
+        rateHistory: rateHistoryFrom({
+          list: async (f) => (f.anchorDomain === "c.example" ? history("1500") : []),
+        }),
+        now: () => NOW,
+      });
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(plan.offered.map((o) => [o.receivingDomain, o.price.label])).toEqual([
+        ["c.example", "estimated"],
+      ]);
+      const a = plan.dropped.find((d) => d.corridorId === "lane-a");
+      expect(a?.reason).toContain("estimated:");
+      expect(a?.reason).not.toContain("indicative");
+    });
+
+    it("rate history reads only the receiving anchor's own samples for the pair", async () => {
+      const filters: unknown[] = [];
+      const source = rateHistoryFrom({
+        list: async (f) => {
+          filters.push(f);
+          return [{ rate: "1500.1", sampledAt: 5, outlier: true }];
+        },
+      });
+      const samples = await source({
+        receivingDomain: "c.example",
+        sellAsset: "stellar:USDC:GISSUER",
+        buyAsset: "iso4217:NGN",
+        sinceMs: 1,
+      });
+      expect(filters).toEqual([
+        {
+          anchorDomain: "c.example",
+          sellAsset: "stellar:USDC:GISSUER",
+          buyAsset: "iso4217:NGN",
+          since: 1,
+        },
+      ]);
+      expect(samples).toEqual([{ rate: "1500.1", timestampMs: 5, outlier: true }]);
+    });
+
+    it("prints offered options in rank order with label, rate, recipient amount, reliability and reasons, then the dropped ones", async () => {
+      const a = args();
+      const plan = await planCliRoutes(a, corridors, {
+        registry: registry(["a.example", "b.example", "c.example"]),
+        fetch: priceFeed({ "a.example": "150000", "b.example": "152000" }, []),
+        now: () => NOW,
+      });
+      const out = formatRoutes(a.request, plan, {
+        network: "testnet",
+        registry: "CREG",
+        offline: false,
+        rateHistory: false,
+      });
+      expect(out).toContain("routes for 100 USDC -> iso4217:NGN in NG");
+      expect(out).toContain("CREG on testnet");
+      expect(out.indexOf("1. b.example")).toBeLessThan(out.indexOf("2. a.example"));
+      expect(out).toContain("1. b.example (lane-b, sep31) — indicative");
+      expect(out).toContain("rate:           1520");
+      expect(out).toContain("recipient gets: 152000 iso4217:NGN");
+      expect(out).toMatch(/reliability: {4}\d\.\d\d/);
+      expect(out).toContain("- ranked 1 of 2");
+      expect(out).toContain("dropped (2):");
+      expect(out).toContain("c.example (lane-c, sep31): unpriceable");
+    });
+  });
+
+  describe("registryFor", () => {
+    afterEach(() => vi.unstubAllEnvs());
+
+    it("refuses a network with no registry in contracts/deployments.json", () => {
+      vi.stubEnv("REGISTRY_CONTRACT_ID", "");
+      const r = registryFor("public", { public: { registry: null } });
+      expect(r.ok).toBe(false);
+      expect(!r.ok && r.error).toContain("no registry deployed on public");
+    });
+
+    it("uses the network's registry, or REGISTRY_CONTRACT_ID when set", () => {
+      vi.stubEnv("REGISTRY_CONTRACT_ID", "");
+      // Real ids from contracts/deployments.json; building the client reads nothing.
+      const registryId = "CDFOVONWR3GGMGH2OC7YATRZE64RKSRAS7UMF7R2TSC6LNNO5G32RSX4";
+      const otherId = "CAHSKTAVHIES6MX2DUGNBA4VDB77WYNKEIZPOT7QX2RMJUL5RUIVKX2L";
+      const deployments = { testnet: { registry: registryId, rpcUrl: "https://rpc.invalid" } };
+      const r = registryFor("testnet", deployments);
+      expect(r.ok && r.contractId).toBe(registryId);
+      vi.stubEnv("REGISTRY_CONTRACT_ID", otherId);
+      const o = registryFor("testnet", deployments);
+      expect(o.ok && o.contractId).toBe(otherId);
+    });
+
+    it("reports a malformed REGISTRY_CONTRACT_ID instead of throwing", () => {
+      vi.stubEnv("REGISTRY_CONTRACT_ID", "CNOTACONTRACT");
+      const r = registryFor("testnet", { testnet: { registry: null } });
+      expect(r.ok).toBe(false);
+      expect(!r.ok && r.error).toContain("registry CNOTACONTRACT on testnet");
+    });
   });
 });

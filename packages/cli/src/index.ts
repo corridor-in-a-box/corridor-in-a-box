@@ -8,6 +8,7 @@
 //   corridor canary   <file.corridor.yaml> --amount <amount> [--network <public|testnet>] [--dry-run]
 //   corridor breaker  status [corridorId]
 //   corridor breaker  reset <corridorId> --reason "…"
+//   corridor routes   --amount <amount> --to <asset> --country <CC> [--network <testnet|public>] [--offline] [--json]
 //
 // `plan` is the cheap pre-flight: it tells you whether a corridor is actually
 // runnable (does the dest anchor expose SEP-31? a SEP-38 quote server?) before
@@ -58,12 +59,14 @@ import {
   runRegistryCheck,
   type RegistryNetwork,
 } from "./plan-registry.js";
+import { routesCommand } from "./routes.js";
 
 /** The first line is the main usage text; the breaker help follows it. */
 const USAGE = [
   "usage: corridor <validate|plan|lint|canary|new> <file.corridor.yaml|domain> [options] | runs list --state held | resolve <key> --outcome <outcome> --note <text>",
   "       corridor plan <file.corridor.yaml> [--json] [--registry [--network testnet|public]]",
   "       corridor profile validate <file.json> [--json]",
+  "       corridor routes --amount <amount> --to <asset> --country <CC> [--from <asset>] [--labels …] [--network testnet|public] [--dir <dir>] [--offline] [--json]",
   '       corridor breaker <status [corridorId] | reset <corridorId> --reason "…">',
   "       corridor new <domain> [--source-asset <asset>] [--network <public|testnet>] [--out <file>] [--allow-not-runnable]",
   "",
@@ -86,6 +89,7 @@ async function main(argv: string[]): Promise<number> {
   if (cmd === "breaker") return breakerCommand(argv.slice(1));
   if (cmd === "new") return newCommand(argv.slice(1));
   if (cmd === "profile") return profileCommand(argv.slice(1));
+  if (cmd === "routes") return routesCommand(argv.slice(1));
   if (!cmd || (cmd !== "validate" && cmd !== "plan" && cmd !== "lint" && cmd !== "canary")) {
     console.error(USAGE);
     return EXIT_USAGE;

@@ -7,6 +7,22 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
+### Added — `corridor routes`: see the planner's ranked options from the CLI ([#619](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/619))
+
+- `corridor routes --amount 100 --to NGN --country NG` builds an RFC 0004 `RouteRequest`
+  (`--from`, `--payout-method`, and `--labels` / `--margin-bps` / `--window-days` /
+  `--guarantee-estimates` for the policy) and runs the same `planRoutes` composition as
+  `POST /routes`. It prints the offered options in rank order with their price label (`locked`,
+  `indicative`, `estimated`), rate, recipient amount, reliability and reasons, then each dropped
+  corridor with why; `--json` prints `{ request, network, registry, offline, offered, dropped }`.
+- `--network testnet|public` (default `testnet`) picks the AnchorRegistry from
+  `contracts/deployments.json`, with the `SOROBAN_RPC_URL` / `REGISTRY_CONTRACT_ID` overrides; no
+  registry on that network means no plan. Indicative prices come from SEP-38 `GET /price`,
+  estimated ones from rate history when `DATABASE_URL` is set. `locked` is not wired and is
+  dropped with that reason. `--offline` contacts no anchor, so it can only show `estimated`.
+- `planRoutes` moved from `@corridor/service` to `@corridor/router` so the CLI can run it
+  without the HTTP service. `@corridor/service` still exports it; `POST /routes` is unchanged.
+
 ### Added — the send flow driven against the reference anchor in CI ([#693](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/693))
 
 - `web/e2e/send-flow.spec.ts` runs the browser against the live lane: the Anchor Platform
@@ -55,7 +71,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   ranked RFC 0004 options with a price label, rate, `recipientGets`, reliability and reasons, and
   every matching corridor it could not offer, with why.
 - Built from the `@corridor/router` blocks in RFC order (`planRoutes` in
-  `packages/service/src/plan-routes.ts`): `candidates()`, `filterByEvidence()`, the manifest's
+  `packages/router/src/plan-routes.ts`): `candidates()`, `filterByEvidence()`, the manifest's
   limits with the engine's cap for an unproven lane, `filterByCircuitBreaker()`, then a price,
   firmest allowed label first (`locked` from a firm SEP-38 quote, `indicative` from SEP-38
   `GET /price`, `estimated` from rate history), `policy.allowedLabels`, `reliability()` and

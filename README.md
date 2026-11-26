@@ -50,6 +50,7 @@ pnpm example            # run a payment end-to-end (mocked anchor + settle)
 pnpm example:plan-and-pay   # quote three mock anchors, rank them, pay the best one
 pnpm mock:anchor        # scriptable local SEP-1/10/12/31/38 anchor (stall, KYC reject, refund, …): the quickest full corridor
 pnpm cli plan corridors/reference.corridor.yaml   # offline pre-flight / liveness check
+pnpm cli routes --amount 100 --to NGN --country NG # what the planner would offer, and why; sends nothing
 CORRIDOR_SIGNER_SECRET=S… pnpm cli canary corridors/reference.corridor.yaml \
   --amount 1.00 --dry-run                          # real anchor up to the pre-settle gate, no payment
 CORRIDOR_SIGNER_SECRET=S… pnpm cli canary corridors/reference.corridor.yaml \
@@ -92,7 +93,8 @@ packages/
   service/       thin HTTP API over the engine (auth + rate limiting, an
                  OpenAPI 3.1 spec, an optional Redis limiter), zero deps
   otel/          OpenTelemetry adapters for the engine's Metrics and Logger
-  cli/           validate a manifest; print an offline runnability plan
+  cli/           validate a manifest; print an offline runnability plan;
+                 `routes` shows the ranked RFC 0004 route options
 corridors/       the manifests — ALL corridor-specifics live here,
                  nowhere else (README.md there catalogues them)
 contracts/       Soroban registry + attester contracts

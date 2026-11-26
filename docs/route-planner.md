@@ -12,8 +12,10 @@ The design is [RFC 0004: Smart router](rfcs/0004-smart-router.md), sections 1,
 > **What is built today.** `@corridor/router` ships the planner's types and its
 > steps as separate building blocks, including the ranking function `rank()`
 > ([#611]), and the engine falls back to the next route before funds move
-> ([#626]). It does not ship a complete `RoutePlanner` that wires the steps
-> together. Each section below says which parts exist and which are planned.
+> ([#626]). `planRoutes()` wires the steps together (all but the lane check):
+> `POST /routes` ([#617]) serves it and `corridor routes` ([#619]) runs it from
+> the CLI. No class implementing `RoutePlanner` ships yet. Each section below
+> says which parts exist and which are planned.
 
 ## What the planner does and does not do
 
@@ -278,6 +280,8 @@ The planner chooses; the engine pays. What exists today to connect the two:
 [#611]: https://github.com/corridor-in-a-box/corridor-in-a-box/issues/611
 [#612]: https://github.com/corridor-in-a-box/corridor-in-a-box/issues/612
 [#613]: https://github.com/corridor-in-a-box/corridor-in-a-box/issues/613
+[#617]: https://github.com/corridor-in-a-box/corridor-in-a-box/issues/617
+[#619]: https://github.com/corridor-in-a-box/corridor-in-a-box/issues/619
 [#626]: https://github.com/corridor-in-a-box/corridor-in-a-box/issues/626
 [#627]: https://github.com/corridor-in-a-box/corridor-in-a-box/issues/627
 [#644]: https://github.com/corridor-in-a-box/corridor-in-a-box/issues/644

@@ -1,5 +1,6 @@
-// POST /routes: the RFC 0004 route planner, composed from the @corridor/router
-// building blocks. Steps, in RFC order (docs/rfcs/0004-smart-router.md §1,
+// planRoutes(): the RFC 0004 route planner, composed from this package's
+// building blocks. @corridor/service serves it as POST /routes and the CLI runs
+// it as `corridor routes`. Steps, in RFC order (docs/rfcs/0004-smart-router.md §1,
 // "Steps inside plan()"):
 //
 //   1. candidates()            corridors whose destination is destAsset in destCountry
@@ -18,34 +19,25 @@
 
 import { sep38SellAsset, type Quote } from "@corridor/adapter-kit";
 import { liveness, type Corridor } from "@corridor/manifest";
+import { ALL_PRICE_LABELS, filterOptionsByAllowedLabels } from "./label-policy";
+import { filterByCircuitBreaker, type BreakerStateReader } from "./breaker-filter";
+import { candidates } from "./candidates";
 import {
-  ALL_PRICE_LABELS,
-  DEFAULT_ESTIMATE_MARGIN_BPS,
   DEFAULT_ESTIMATE_WINDOW_DAYS,
   DEFAULT_MIN_ESTIMATE_SPAN_DAYS,
-  asAttestationSource,
   buildEstimatedOption,
-  candidates,
-  cautiousRecipientAmount,
-  fetchIndicativePrice,
-  filterByCircuitBreaker,
-  filterByEvidence,
-  filterByLimitsAndFields,
-  filterOptionsByAllowedLabels,
-  formatOptionReason,
-  priceCandidatesInParallel,
-  rank,
-  reliability,
-  requestLockedOption,
-  type AttestationSourceLike,
-  type BreakerStateReader,
-  type FirmQuoteCandidate,
-  type PriceLabel,
   type RateSample,
-  type ReliabilityRunStore,
-  type RouteOption,
-  type RouteRequest,
-} from "@corridor/router";
+} from "./estimated-price";
+import { filterByEvidence } from "./evidence-filter";
+import { requestLockedOption, type FirmQuoteCandidate } from "./firm-quote";
+import { DEFAULT_ESTIMATE_MARGIN_BPS, fetchIndicativePrice } from "./indicative-price";
+import { filterByLimitsAndFields } from "./limits-filter";
+import { priceCandidatesInParallel } from "./parallel-pricer";
+import type { PriceLabel, RouteOption, RouteRequest } from "./planner";
+import { cautiousRecipientAmount, rank } from "./rank";
+import { formatOptionReason } from "./reasons";
+import { asAttestationSource, type AttestationSourceLike } from "./registry-resolver";
+import { reliability, type ReliabilityRunStore } from "./reliability";
 import {
   applyPrice,
   compareAmounts,

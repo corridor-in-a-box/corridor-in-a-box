@@ -157,8 +157,9 @@ business's own signer executes the payment. The design is RFC 0004, sections 1, 
 \`@corridor/router\` ships the planner's types and most of its steps as building
 blocks, including ranking (\`rank()\`, #611) and the reliability score
 (\`reliability()\`, #612). The engine falls back to the next route before funds
-move (#626). A complete \`RoutePlanner\` that wires the steps together is not
-shipped yet.
+move (#626). \`planRoutes()\` wires the steps together (all but the lane check):
+\`POST /routes\` (#617) serves it and \`corridor routes\` (#619) runs it from the
+CLI. No class implementing \`RoutePlanner\` ships yet.
 
 ## The steps
 

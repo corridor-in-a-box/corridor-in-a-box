@@ -18,7 +18,9 @@ import type { Corridor } from "@corridor/manifest";
 import { execute, type EngineDeps, type ExecuteOptions } from "@corridor/engine";
 import {
   ALL_PRICE_LABELS,
+  planRoutes,
   type PriceLabel,
+  type RoutePlanningOptions,
   type RoutePolicy,
   type RouteRequest as PlanRouteRequest,
 } from "@corridor/router";
@@ -41,7 +43,6 @@ import {
   type ChosenRouteOptionQuote,
   type RouteOptionRejection,
 } from "./route-option";
-import { planRoutes, type RoutePlanningOptions } from "./plan-routes";
 
 export { signRouteOption, verifyRouteOption };
 export { planRoutes };
@@ -52,7 +53,7 @@ export type {
   RoutePlan,
   RoutePlanningContext,
   RoutePlanningOptions,
-} from "./plan-routes";
+} from "@corridor/router";
 export type {
   ChosenRouteOption,
   ChosenRouteOptionPayload,
