@@ -186,7 +186,7 @@ shipped yet.
 ## Route types in plain words
 
 - **SEP-31 (available):** anchor to anchor; the receiving anchor pays the recipient.
-- **SEP-6 (next):** the business withdraws straight to the recipient's account. *The third-party caveat:* SEP-6 was built for customers moving their own money, so it is offered only when the manifest declares \`third_party_payout: true\`, confirmed with the anchor. The flag is on main (#644); the planner rule that reads it is planned (#645).
+- **SEP-6 (next):** the business withdraws straight to the recipient's account. *The third-party caveat:* SEP-6 was built for customers moving their own money, so it is offered only when the manifest declares \`third_party_payout: true\`, confirmed with the anchor. The flag (#644) and the planner rule that reads it in \`candidates()\` (#645) are on main.
 - **Wallet (in build):** a plain Stellar payment to the recipient's own wallet; the recipient cashes out later on their own.
 
 ## Plugging in your own planner

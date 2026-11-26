@@ -139,11 +139,11 @@ refused with `ROUTE_PINNED`.
 
 ## Route types
 
-| Type     | Status    | How the money moves                                                                                                               | What must be true first                                                                                                     |
-| -------- | --------- | --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `sep31`  | available | Anchor to anchor. The receiving anchor pays the recipient.                                                                        | The anchor is attested and the lane is open to this business.                                                               |
-| `sep6`   | next      | The business withdraws through SEP-6 straight to the recipient's account.                                                         | The manifest declares `third_party_payout: true`, confirmed with the anchor ([#644]). The planner rule is planned ([#645]). |
-| `wallet` | in build  | A plain Stellar payment of the corridor's asset (for example USDC) to the recipient's own wallet. The recipient cashes out later. | The recipient has a wallet that can hold the asset.                                                                         |
+| Type     | Status    | How the money moves                                                                                                               | What must be true first                                                                                                           |
+| -------- | --------- | --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `sep31`  | available | Anchor to anchor. The receiving anchor pays the recipient.                                                                        | The anchor is attested and the lane is open to this business.                                                                     |
+| `sep6`   | next      | The business withdraws through SEP-6 straight to the recipient's account.                                                         | The manifest declares `third_party_payout: true`, confirmed with the anchor ([#644]). `candidates()` drops it otherwise ([#645]). |
+| `wallet` | in build  | A plain Stellar payment of the corridor's asset (for example USDC) to the recipient's own wallet. The recipient cashes out later. | The recipient has a wallet that can hold the asset.                                                                               |
 
 **SEP-31** is the Stellar standard for one licensed business paying another. It
 runs without a person in the loop, which is what a payment engine needs.
@@ -156,8 +156,8 @@ tell. So a SEP-6 route is only offered when the corridor manifest says
 flag is on main ([#644]): only a `protocol: sep6` corridor may carry it, and
 `third_party_payout: true` needs a `third_party_payout_note` saying who
 confirmed it and when. `allowsThirdPartyPayout()` in `@corridor/manifest` reads
-it. The planner rule that offers SEP-6 candidates only when it is set is
-planned ([#645]).
+it. `candidates()` offers a SEP-6 corridor only when it is set, and otherwise
+drops it with the reason `SEP6_THIRD_PARTY_PAYOUT_REASON` ([#645]).
 
 **Wallet.** No receiving anchor is involved and nothing is converted: the
 recipient gets the corridor's asset in their own wallet and cashes out through

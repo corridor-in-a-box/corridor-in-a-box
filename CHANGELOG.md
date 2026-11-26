@@ -15,9 +15,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   fallback to the next option with `<key>:alt1` before funds move, the route types (SEP-31,
   SEP-6 with the third-party caveat, wallet), and how to plug in a custom `RoutePlanner`
   and prove it with `describePlannerContract`. It marks which steps are on main and which
-  are planned (SEP-6 candidates #645, wallet trustline check #648).
+  are planned (wallet trustline check #648).
 - `docs/README.md` indexes the guides and RFCs. The web docs site has a route planner
   page, and `docs/route-resolver.md` and `README.md` link to the guide.
+
 ### Added — SEP-6 corridors are candidates only with `third_party_payout` ([#645](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/645))
 
 - The router's planner step 1, `candidates(request, corridors)` in `@corridor/router`, keeps a
