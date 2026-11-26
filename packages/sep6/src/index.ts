@@ -941,6 +941,8 @@ export class Sep6Adapter implements AnchorAdapter {
             status?: unknown;
             amount_in?: unknown;
             amount_in_asset?: unknown;
+            amount_out?: unknown;
+            amount_out_asset?: unknown;
             withdraw_anchor_account?: unknown;
             withdraw_memo?: unknown;
             withdraw_memo_type?: unknown;
@@ -965,6 +967,10 @@ export class Sep6Adapter implements AnchorAdapter {
         typeof tx.amount_in === "string" ? tx.amount_in : undefined,
       );
       const amountIn = amountString(tx.amount_in);
+      // amount_out is denominated in amount_out_asset (the off-chain payout asset),
+      // not the bridge asset amount_in uses; fall back to the corridor's dest asset.
+      const amountOut = amountString(tx.amount_out);
+      const outAsset = nonEmptyString(tx.amount_out_asset) ?? this.anchor.asset;
       const depositAddress = nonEmptyString(tx.withdraw_anchor_account);
       const memo = nonEmptyString(tx.withdraw_memo);
       const memoType = parseMemoType(tx.withdraw_memo_type);
@@ -973,6 +979,9 @@ export class Sep6Adapter implements AnchorAdapter {
         ...mapped,
         ...(refunds ? { refunds } : {}),
         ...(amountIn !== undefined ? { amountIn: { asset, amount: amountIn } } : {}),
+        ...(amountOut !== undefined
+          ? { amountOut: { asset: outAsset, amount: amountOut } }
+          : {}),
         ...(depositAddress !== undefined ? { depositAddress } : {}),
         ...(memo !== undefined ? { memo } : {}),
         ...(memoType !== undefined ? { memoType } : {}),

@@ -118,6 +118,29 @@ recommending explicit declaration of `dest.protocol: sep31`. Manifests omitting 
 while supplying `transfer_server` are rejected with an error instructing the author to set
 `protocol: sep6`.
 
+#### `dest.third_party_payout` (SEP-6 only)
+
+SEP-6 was built for users withdrawing their own funds. Some anchors also let a business
+withdraw to a third party (the recipient), but nothing in `stellar.toml` or SEP-6 `GET /info`
+says which, so it cannot be probed (RFC 0004 §5). A `protocol: sep6` dest records it by hand:
+
+```yaml
+dest:
+  protocol: sep6
+  # …name, asset, endpoints…
+  third_party_payout: true
+  third_party_payout_note: "Confirmed by <who> at <anchor>, <YYYY-MM-DD>, <how>"
+```
+
+- `third_party_payout` is a boolean. Any other form (an object, a string such as `"true"`,
+  `null`) is refused. Omitting it means third-party payout is not allowed.
+- `third_party_payout_note` records who confirmed it with the anchor, and when. It is
+  required when `third_party_payout` is `true` and must be a non-empty string.
+- Both fields are refused (`MANIFEST_INVALID`) on any dest that is not `protocol: sep6`:
+  `sep31`, `wallet`, `custom:<id>`, and legacy dests with no `protocol`.
+- Code reads the flag through `allowsThirdPartyPayout(corridor)` from `@corridor/manifest`,
+  which is `true` only for a SEP-6 dest with `third_party_payout: true`.
+
 See also [why-not-anchor-platform.md](./why-not-anchor-platform.md) for how this
 relates to the SDF Anchor Platform (the server side an anchor runs).
 

@@ -344,6 +344,21 @@ describe("service: GET /payments/:key", () => {
     expect((r.body as { state: string }).state).toBe("completed");
   });
 
+  it("exposes estimateGap in run status when recorded", async () => {
+    const store = new InMemoryIdempotencyStore();
+    await store.put({
+      idempotencyKey: "with-gap",
+      corridorId: "test",
+      state: "completed",
+      version: 5,
+      estimateGap: "5.00",
+    });
+    const s = svc({ deps: { ...deps(), idempotency: store } });
+    const r = await s.route({ method: "GET", path: "/payments/with-gap" });
+    expect(r.status).toBe(200);
+    expect((r.body as { estimateGap?: string }).estimateGap).toBe("5.00");
+  });
+
   it("404s an unknown key", async () => {
     const r = await svc().route({ method: "GET", path: "/payments/missing" });
     expect(r.status).toBe(404);

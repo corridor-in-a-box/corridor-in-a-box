@@ -72,6 +72,11 @@ export interface StoredRun {
   };
   lastError?: string;
   /**
+   * Difference between guaranteed/shown payout amount and actual anchor payout amount (RFC 0004 D4).
+   * Recorded when guaranteeEstimates is enabled.
+   */
+  estimateGap?: string;
+  /**
    * Opaque tenant id that owns this run, so a read can be scoped to its creator.
    * Set by the caller from an already-VALIDATED credential — never from a
    * request body. Undefined when the deployment runs without auth, in which case

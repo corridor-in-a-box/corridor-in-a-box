@@ -19,6 +19,58 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   (at least 7 days of data and 100 samples in the last 7 days), with the counts behind it.
 - With no source configured, an unreadable source, or no data for a pair, the chart shows an
   empty state and no numbers.
+### Added — estimate gap when a business guarantees estimated prices ([#627](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/627))
+
+- With `guaranteeEstimates` on (`EngineDeps` or `ExecuteOptions`, RFC 0004 D4), the engine
+  records `estimateGap` on the run: the anchor's actual payout minus the guaranteed amount,
+  computed with decimal-safe money arithmetic. Positive is a gain, negative a loss the business
+  absorbed, zero an exact match. Nothing is recorded when the option is off.
+- The guaranteed amount defaults to the quote's `destAmount` and can be set with
+  `ExecuteOptions.guaranteedAmount`. The actual amount comes from the anchor's reported
+  `amountOut` (or `ExecuteOptions.actualAmount`).
+- `TransactionStatus` and `OpenTransaction` gain an optional `amountOut`. The SEP-31 and SEP-6
+  adapters read `amount_out` in `amount_out_asset`, falling back to the corridor's dest asset.
+- `estimateGap` is stored in a new nullable `estimate_gap` column on `corridor_runs` (added by
+  `migrate()` on existing tables), read back by `get()` and `listByState()`, and returned on
+  `RunResult` and `GET /payments/:key` (`RunStatus` in `openapi.yaml`).
+
+### Added — `reliability()` score for receiving anchors ([#612](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/612))
+
+- `reliability(anchor, deps)` in `@corridor/router` scores a receiving anchor from 0 to 1 (RFC
+  0004): the business's own success rate on it over 30 days, shrunk toward 0.5 below 20 runs,
+  and multiplied by an attestation-age factor that reaches 0 at the one-week freshness bound. No
+  attestation scores 0. The rules are documented in `docs/route-resolver.md` ("Reliability").
+
+### Added — rate collector loop with 15-minute schedule, jitter, and overlap guard ([#593](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/593))
+
+- `RateCollectorLoop` in `@corridor/engine` runs a list of collector steps (`{ name, run }`) on a
+  15-minute schedule by default (RFC 0004 §3). Each run starts after a random jitter (default up
+  to 5 s), a tick is skipped while the previous run is still going (`skipCount`,
+  `corridor.rate_collector.skipped_overlap`), one step failing does not stop the others, and
+  `stop()` cancels a pending jitter and waits for the run in flight.
+- `pnpm rate:collector` (`examples/run-rate-collector.ts`) is the always-on process. Its steps
+  are the real collectors: `sep38_prices` calls `pollSep38Prices` (#590) for the registry's
+  attested anchors on `STELLAR_NETWORK` plus `RATE_COLLECTOR_SEP38_ANCHORS`, and `dex_trades`
+  calls `collectDexTrades` (#591) for the pairs in `config/dex-pairs.json` over the last 24 hours
+  of complete 15-minute buckets. Every sample is written to Postgres (`DATABASE_URL`, required)
+  through `PostgresRateHistoryStore.recordFlaggingOutliers`. A step with nothing configured is
+  left out. It stops cleanly on `SIGTERM` / `SIGINT`.
+- `.env.example` documents `RATE_COLLECTOR_INTERVAL_MS`, `RATE_COLLECTOR_INTERVAL_SECONDS`,
+  `RATE_COLLECTOR_JITTER_MS`, `RATE_COLLECTOR_RUN_ON_START`, `RATE_COLLECTOR_SEP38_ANCHORS` and
+  `RATE_COLLECTOR_DEX_PAIRS`.
+
+### Added — `third_party_payout` flag for SEP-6 corridors ([#644](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/644))
+
+- A `protocol: sep6` dest can declare `third_party_payout: true` when the anchor has
+  confirmed it lets a business withdraw to a third party, which cannot be probed (RFC 0004 §5).
+  `third_party_payout_note`, recording who confirmed it and when, is required when the flag
+  is `true`.
+- `@corridor/manifest` refuses the flag and its note on every non-SEP-6 dest (`sep31`,
+  `wallet`, `custom:<id>`, legacy dests with no `protocol`), refuses any non-boolean form
+  (object, string, `null`), and refuses an empty note. All three rules live in one check that
+  reads the raw dest, so a protocol schema can no longer drop the field silently.
+- `allowsThirdPartyPayout(corridor)` is exported for the router: `true` only for a SEP-6 dest
+  with `third_party_payout: true`. Documented in `docs/sep-coverage.md`.
 
 ### Added — wallet route: settlement to a recipient account ([#647](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/647))
 
