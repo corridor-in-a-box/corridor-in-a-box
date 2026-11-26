@@ -28,6 +28,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   Smart Router and Route Planner.
 - `docs/README.md` provides an index of technical guides and RFCs.
 - `docs/route-resolver.md` and `README.md` link to the new guide.
+### Added — estimate gap when a business guarantees estimated prices ([#627](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/627))
+
+- With `guaranteeEstimates` on (`EngineDeps` or `ExecuteOptions`, RFC 0004 D4), the engine
+  records `estimateGap` on the run: the anchor's actual payout minus the guaranteed amount,
+  computed with decimal-safe money arithmetic. Positive is a gain, negative a loss the business
+  absorbed, zero an exact match. Nothing is recorded when the option is off.
+- The guaranteed amount defaults to the quote's `destAmount` and can be set with
+  `ExecuteOptions.guaranteedAmount`. The actual amount comes from the anchor's reported
+  `amountOut` (or `ExecuteOptions.actualAmount`).
+- `TransactionStatus` and `OpenTransaction` gain an optional `amountOut`. The SEP-31 and SEP-6
+  adapters read `amount_out` in `amount_out_asset`, falling back to the corridor's dest asset.
+- `estimateGap` is stored in a new nullable `estimate_gap` column on `corridor_runs` (added by
+  `migrate()` on existing tables), read back by `get()` and `listByState()`, and returned on
+  `RunResult` and `GET /payments/:key` (`RunStatus` in `openapi.yaml`).
 
 ### Added — `reliability()` score for receiving anchors ([#612](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/612))
 

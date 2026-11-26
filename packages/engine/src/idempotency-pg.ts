@@ -61,6 +61,7 @@ create table if not exists corridor_runs (
   last_error      text,
   owner           text,
   settlement      text,
+  estimate_gap    text,
   updated_at      timestamptz not null default now()
 );
 `;
@@ -104,6 +105,8 @@ const ALTER_TABLE_SQL = [
   `alter table corridor_runs add column if not exists receiving_domain text;`,
   `alter table corridor_runs add column if not exists route_protocol text;`,
   `alter table corridor_runs add column if not exists price_label text;`,
+  // Estimate gap when a business guarantees estimated prices (#627).
+  `alter table corridor_runs add column if not exists estimate_gap text;`,
 ];
 
 export async function migrate(db: Queryable): Promise<void> {
@@ -151,6 +154,7 @@ interface Row {
   last_error: string | null;
   owner: string | null;
   settlement: string | null;
+  estimate_gap: string | null;
 }
 
 function toRun(r: Row): StoredRun {
@@ -198,6 +202,7 @@ function toRun(r: Row): StoredRun {
     lastError: r.last_error ?? undefined,
     owner: r.owner ?? undefined,
     settlement: r.settlement ? JSON.parse(r.settlement) : undefined,
+    estimateGap: r.estimate_gap ?? undefined,
   };
 }
 
@@ -228,8 +233,8 @@ export class PostgresIdempotencyStore implements IdempotencyStore {
           quote_id, quote_expires_at, quote_firm, settlement_amount,
           stellar_tx_hash, settlement_kind, settlement_ref, deposit_address, memo, memo_type,
           refund_id, last_error, owner, settlement, manifest_hash,
-          receiving_domain, route_protocol, price_label, updated_at)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24, now())
+          receiving_domain, route_protocol, price_label, estimate_gap, updated_at)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25, now())
        on conflict (idempotency_key) do nothing
        returning idempotency_key`,
       [
@@ -257,6 +262,7 @@ export class PostgresIdempotencyStore implements IdempotencyStore {
         run.receivingDomain ?? null,
         run.routeProtocol ?? null,
         run.priceLabel ?? null,
+        run.estimateGap ?? null,
       ],
     );
     return res.rows.length > 0;
@@ -268,7 +274,7 @@ export class PostgresIdempotencyStore implements IdempotencyStore {
               quote_id, quote_expires_at, quote_firm, settlement_amount,
               stellar_tx_hash, settlement_kind, settlement_ref, deposit_address, memo, memo_type,
               refund_id, last_error, owner, settlement, manifest_hash,
-              receiving_domain, route_protocol, price_label
+              receiving_domain, route_protocol, price_label, estimate_gap
          from corridor_runs where idempotency_key = $1`,
       [key],
     );
@@ -289,7 +295,7 @@ export class PostgresIdempotencyStore implements IdempotencyStore {
     const result = await this.db.query<Row>(
       `select idempotency_key, corridor_id, state, version, transaction_id, source_transaction_id,
               quote_id, stellar_tx_hash, settlement_kind, settlement_ref, refund_id, last_error, owner, manifest_hash,
-              receiving_domain, route_protocol, price_label
+              receiving_domain, route_protocol, price_label, estimate_gap
          from corridor_runs where state = $1 ${corridor}
         order by updated_at desc, idempotency_key asc limit ${limitParam}`,
       params,
@@ -364,8 +370,8 @@ export class PostgresIdempotencyStore implements IdempotencyStore {
           quote_id, quote_expires_at, quote_firm, settlement_amount,
           stellar_tx_hash, settlement_kind, settlement_ref, deposit_address, memo, memo_type,
           refund_id, last_error, owner, settlement, manifest_hash,
-          receiving_domain, route_protocol, price_label, updated_at)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24, now())
+          receiving_domain, route_protocol, price_label, estimate_gap, updated_at)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25, now())
        on conflict (idempotency_key) do update set
          manifest_hash   = coalesce(corridor_runs.manifest_hash, excluded.manifest_hash),
          receiving_domain = coalesce(corridor_runs.receiving_domain, excluded.receiving_domain),
@@ -388,6 +394,7 @@ export class PostgresIdempotencyStore implements IdempotencyStore {
          refund_id       = coalesce(corridor_runs.refund_id, excluded.refund_id),
          last_error      = excluded.last_error,
          settlement      = coalesce(corridor_runs.settlement, excluded.settlement),
+         estimate_gap    = coalesce(excluded.estimate_gap, corridor_runs.estimate_gap),
          updated_at      = now()
        where corridor_runs.version < excluded.version`,
       [
@@ -415,6 +422,7 @@ export class PostgresIdempotencyStore implements IdempotencyStore {
         run.receivingDomain ?? null,
         run.routeProtocol ?? null,
         run.priceLabel ?? null,
+        run.estimateGap ?? null,
       ],
     );
   }
