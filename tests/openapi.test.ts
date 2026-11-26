@@ -356,87 +356,73 @@ describe("openapi.yaml: route() responses match the spec", () => {
     check(unsigned, "/callbacks/sep31/{corridorId}", "post");
   });
 
-  it("POST /routes: 200 with ranked RouteOptions", async () => {
-    const s = svc();
-    const res = await s.route({
-      method: "POST",
-      path: "/routes",
-      body: { sourceAmount: { asset: "USDC", amount: "100.00" } },
-    });
+  // Planning against the fixture lane: attested, priced by the mock adapter's firm quote.
+  const planning: ServiceOptions["routePlanning"] = {
+    registry: {
+      serves: async () => true,
+      staleness: async () => 0,
+      tomlHash: async () => "hash",
+    },
+    adapterFor: () => createMockAdapter(),
+  };
+  const ROUTES = {
+    sourceAmount: { asset: "USDC", amount: "100.00" },
+    destAsset: "iso4217:ARS",
+    destCountry: "AR",
+  };
+  const plan = (s: ReturnType<typeof svc>, body: unknown) =>
+    s.route({ method: "POST", path: "/routes", body });
+
+  it("POST /routes: 200 with ranked RouteOptions and dropped routes", async () => {
+    const res = await plan(svc({}, { routePlanning: planning }), ROUTES);
     expect(res.status).toBe(200);
+    expect((res.body as { offered: unknown[] }).offered).toHaveLength(1);
     check(res, "/routes", "post");
+
+    const dropped = await plan(svc({}, { routePlanning: planning }), {
+      ...ROUTES,
+      sourceAmount: { asset: "EURC", amount: "100.00" },
+    });
+    expect((dropped.body as { dropped: unknown[] }).dropped).toHaveLength(1);
+    check(dropped, "/routes", "post");
   });
 
-  it("POST /routes: 400 for an invalid body", async () => {
-    const s = svc();
-    const res = await s.route({
-      method: "POST",
-      path: "/routes",
-      body: { sourceAmount: { asset: "USDC", amount: "" } },
-    });
-    expect(res.status).toBe(400);
-    check(res, "/routes", "post");
-  });
+  it("POST /routes: 400 for an invalid body, 422 for an invalid amount", async () => {
+    const s = svc({}, { routePlanning: planning });
+    const invalid = await plan(s, { ...ROUTES, corridorId: "test" });
+    expect(invalid.status).toBe(400);
+    check(invalid, "/routes", "post");
 
-  it("POST /routes: 404 for an unknown corridor", async () => {
-    const s = svc();
-    const res = await s.route({
-      method: "POST",
-      path: "/routes",
-      body: { corridorId: "nope", sourceAmount: { asset: "USDC", amount: "100.00" } },
-    });
-    expect(res.status).toBe(404);
-    check(res, "/routes", "post");
-  });
-
-  it("POST /routes: 422 for an invalid amount or asset", async () => {
-    const s = svc();
-    const amount = await s.route({
-      method: "POST",
-      path: "/routes",
-      body: { sourceAmount: { asset: "USDC", amount: "-5" } },
-    });
+    const amount = await plan(s, { ...ROUTES, sourceAmount: { asset: "USDC", amount: "-5" } });
     expect(amount.status).toBe(422);
     check(amount, "/routes", "post");
-
-    const asset = await s.route({
-      method: "POST",
-      path: "/routes",
-      body: { corridorId: "test", sourceAmount: { asset: "EURC", amount: "5" } },
-    });
-    expect(asset.status).toBe(422);
-    check(asset, "/routes", "post");
   });
 
   it("POST /routes: 401 without a known key, 429 when the bucket is empty", async () => {
-    const keyed = svc({}, { apiKeys: new Set(["k-secret"]) });
-    const denied = await keyed.route({
-      method: "POST",
-      path: "/routes",
-      body: { sourceAmount: { asset: "USDC", amount: "100.00" } },
-    });
+    const denied = await plan(
+      svc({}, { routePlanning: planning, apiKeys: new Set(["k-secret"]) }),
+      ROUTES,
+    );
     expect(denied.status).toBe(401);
     check(denied, "/routes", "post");
 
-    const limited = svc({}, { rateLimiter: { take: () => false } });
-    const res = await limited.route({
-      method: "POST",
-      path: "/routes",
-      body: { sourceAmount: { asset: "USDC", amount: "100.00" } },
-    });
-    expect(res.status).toBe(429);
-    check(res, "/routes", "post");
+    const limited = await plan(
+      svc({}, { routePlanning: planning, rateLimiter: { take: () => false } }),
+      ROUTES,
+    );
+    expect(limited.status).toBe(429);
+    check(limited, "/routes", "post");
   });
 
-  it("POST /routes: 503 while draining", async () => {
-    const s = svc();
+  it("POST /routes: 501 when planning is not configured, 503 while draining", async () => {
+    const unconfigured = await plan(svc(), ROUTES);
+    expect(unconfigured.status).toBe(501);
+    check(unconfigured, "/routes", "post");
+
+    const s = svc({}, { routePlanning: planning });
     await s.drain();
-    const res = await s.route({
-      method: "POST",
-      path: "/routes",
-      body: { sourceAmount: { asset: "USDC", amount: "100.00" } },
-    });
-    expect(res.status).toBe(503);
-    check(res, "/routes", "post");
+    const draining = await plan(s, ROUTES);
+    expect(draining.status).toBe(503);
+    check(draining, "/routes", "post");
   });
 });

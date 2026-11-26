@@ -7,6 +7,29 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
+### Added — `POST /routes`: plan and rank routes before paying ([#617](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/617))
+
+- `@corridor/service` serves `POST /routes`. It takes RFC 0004's `RouteRequest` (`sourceAmount`,
+  `destAsset`, `destCountry`, `payoutMethod`, `policy`) and returns
+  `{ offered: RouteOption[], dropped: [{ corridorId, receivingDomain, protocol, reason }] }`:
+  ranked RFC 0004 options with a price label, rate, `recipientGets`, reliability and reasons, and
+  every matching corridor it could not offer, with why.
+- Built from the `@corridor/router` blocks in RFC order (`planRoutes` in
+  `packages/service/src/plan-routes.ts`): `candidates()`, `filterByEvidence()`, the manifest's
+  limits with the engine's cap for an unproven lane, `filterByCircuitBreaker()`, then a price,
+  firmest allowed label first (`locked` from a firm SEP-38 quote, `indicative` from SEP-38
+  `GET /price`, `estimated` from rate history), `policy.allowedLabels`, `reliability()` and
+  `rank()`. Pricing runs in parallel under a deadline. No transaction is opened.
+- Configured with `ServiceOptions.routePlanning`: an attestation source (required), and
+  optionally a quote adapter, `fetch`, a rate history source and a run store for reliability. A
+  missing source removes that label and says so in `dropped`. Without `routePlanning` the
+  endpoint answers 501 `ROUTE_PLANNING_UNCONFIGURED`.
+- Same API-key auth and rate limit as `POST /payments`; 400 `{field, reason}` for a bad body,
+  422 `AMOUNT_INVALID` for a bad amount, 503 while draining. Documented in
+  `packages/service/openapi.yaml` and checked by `tests/openapi.test.ts`.
+- Not yet: the lane check (RFC 0004 §4b), and `payoutMethod` does not filter, because no
+  manifest declares one. `fees` is returned only when the anchor stated one.
+
 ### Added — Published history of nightly reference runs ([#680](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/680))
 
 - Each nightly `reference-corridor` run is recorded in `web/lib/generated/reference-runs.json`:

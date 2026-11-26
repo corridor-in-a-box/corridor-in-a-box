@@ -293,12 +293,18 @@ importers:
 
   packages/service:
     dependencies:
+      '@corridor/adapter-kit':
+        specifier: workspace:*
+        version: link:../adapter-kit
       '@corridor/engine':
         specifier: workspace:*
         version: link:../engine
       '@corridor/manifest':
         specifier: workspace:*
         version: link:../manifest
+      '@corridor/router':
+        specifier: workspace:*
+        version: link:../router
       '@corridor/types':
         specifier: workspace:*
         version: link:../types
