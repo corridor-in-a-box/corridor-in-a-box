@@ -18,6 +18,56 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   are planned (SEP-6 candidates #645, wallet trustline check #648).
 - `docs/README.md` indexes the guides and RFCs. The web docs site has a route planner
   page, and `docs/route-resolver.md` and `README.md` link to the guide.
+### Added — SEP-6 corridors are candidates only with `third_party_payout` ([#645](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/645))
+
+- The router's planner step 1, `candidates(request, corridors)` in `@corridor/router`, keeps a
+  `protocol: sep6` corridor only when its manifest sets `third_party_payout: true` (#644), read
+  through `allowsThirdPartyPayout` from `@corridor/manifest`. Without the flag, or with it set to
+  `false`, the corridor goes to `nonMatching` with the reason
+  `SEP6_THIRD_PARTY_PAYOUT_REASON` (also exported), alongside any asset or country mismatch.
+  SEP-31, wallet and custom corridors are unchanged.
+- `corridors/testanchor-sep6.corridor.yaml` records no third-party payout confirmation, so it is
+  no longer a candidate for USD to the US.
+
+### Added — Rate history chart per currency pair ([#600](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/600))
+
+- The home page charts every pair, and each corridor page charts its own pair, from the daily
+  summaries that `fetchRateSummaries()` reads (`RATE_SUMMARIES_URL`). One line per source shows
+  the daily median, with a shaded band down to the daily P25 that estimated prices start from.
+  A `reference_fx` source, when published, is drawn as the reference line.
+- A day with no summary or no samples is a gap: the line and band stop there and the day is
+  marked, never interpolated.
+- Each anchor source shows whether its published summaries meet the RFC 0004 minimum-data rule
+  (at least 7 days of data and 100 samples in the last 7 days), with the counts behind it.
+- With no source configured, an unreadable source, or no data for a pair, the chart shows an
+  empty state and no numbers.
+
+### Added — rate history minimum-data rule for estimated prices ([#598](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/598))
+
+- `@corridor/router` exports `assessRateHistory` (`packages/router/src/rate-history.ts`): given the
+  rate history held for a pair at an anchor, it answers whether an `estimated` price may be shown
+  at all, per RFC 0004 §3: at least 100 samples in the 7-day window, and a history reaching back
+  at least 7 days (`now` minus the oldest usable sample, measured over all the history passed in).
+  It returns `{ ok: true, p25, samples }` or `{ ok: false, reason }`.
+- It asks `buildEstimatedOption` rather than re-implementing the rule, so both use the same
+  defaults (`DEFAULT_MIN_ESTIMATE_SAMPLES`, `DEFAULT_MIN_ESTIMATE_SPAN_DAYS`,
+  `DEFAULT_ESTIMATE_WINDOW_DAYS`), the same sample filtering (malformed, non-positive, future and
+  outlier-flagged samples are left out) and the same P25. Window and both thresholds are
+  configurable.
+
+### Added — lane check v1: authorised GET /sep31/info probe ([#632](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/632))
+
+- `checkLane` in `@corridor/router` now runs two steps: the SEP-10 login through
+  adapter-kit's `Sep10Client` (`sep10_auth`), then `GET <transfer_server_sep31>/info`
+  with the JWT as bearer (`sep31_info`). The lane is `open` only when both pass and the
+  `/info` receive list includes the corridor's on-chain asset (`settlement.receive_asset`,
+  else `settlement.bridge_asset`), matched by asset code and not `enabled: false`.
+- A result that is not open names the step that stopped it in a new `failedStep` field
+  (`LaneCheckStep` is exported). `/info` answering 401 or 403, or not receiving the asset,
+  is `closed`; a 5xx, timeout, malformed body or a corridor with no SEP-31 endpoint is
+  `unknown`. The JWT is sent only to the manifest's SEP-31 server and is never returned.
+- `tests/lane-check.test.ts` covers the bearer header, each refusal and unknown case at
+  `sep31_info`, and asserts `failedStep` on the existing SEP-10 cases.
 
 ### Added — Published history of nightly reference runs ([#680](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/680))
 

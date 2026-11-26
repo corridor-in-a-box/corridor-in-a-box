@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { loadCorridor, parseCorridor, type Corridor } from "@corridor/manifest";
-import { candidates } from "@corridor/router";
+import { candidates, SEP6_THIRD_PARTY_PAYOUT_REASON } from "@corridor/router";
 
 const CORRIDORS_DIR = fileURLToPath(new URL("../corridors/", import.meta.url));
 
@@ -52,8 +52,9 @@ describe("candidates over corridors/", () => {
       "dest.asset",
     );
 
+    // testanchor-sep6 matches on asset and country but has no third_party_payout flag (#645).
     const usdInUs = candidates({ destAsset: "iso4217:USD", destCountry: "US" }, all);
-    expect(ids(usdInUs.matching)).toEqual(["mock", "reference-testnet", "testanchor-sep6"]);
+    expect(ids(usdInUs.matching)).toEqual(["mock", "reference-testnet"]);
     expect(usdInUs.nonMatching.find((d) => d.corridor.id === "ng-cowrie")?.reason).toContain(
       "NG",
     );
@@ -93,6 +94,82 @@ describe("candidates over corridors/", () => {
       realCorridors(),
     );
     expect(ids(result.matching)).toEqual(["ng-cowrie"]);
+  });
+});
+
+describe("SEP-6 candidates need third_party_payout (#645)", () => {
+  const usdInUs = { destAsset: "iso4217:USD", destCountry: "US" };
+  // Test fixture only: the real manifest records no confirmation, so the flag
+  // and its note are added here to exercise the confirmed path.
+  const note = "Test fixture: confirmed with the anchor (not a real confirmation)";
+
+  function sep6(id: string, thirdPartyPayout?: boolean): Corridor {
+    const real = find(realCorridors(), "testanchor-sep6");
+    const dest =
+      thirdPartyPayout === undefined
+        ? real.dest
+        : {
+            ...real.dest,
+            third_party_payout: thirdPartyPayout,
+            ...(thirdPartyPayout ? { third_party_payout_note: note } : {}),
+          };
+    const parsed = parseCorridor({ ...real, id, dest });
+    if (!parsed.ok) throw new Error(`fixture did not parse: ${parsed.error.message}`);
+    return parsed.value;
+  }
+
+  it("drops the real SEP-6 corridor, which has no flag, with a reason", () => {
+    const real = find(realCorridors(), "testanchor-sep6");
+    expect(real.dest.protocol).toBe("sep6");
+
+    const result = candidates(usdInUs, [real]);
+    expect(result.matching).toEqual([]);
+    expect(result.nonMatching).toHaveLength(1);
+    expect(result.nonMatching[0]!.corridor.id).toBe("testanchor-sep6");
+    expect(result.nonMatching[0]!.reason).toBe(SEP6_THIRD_PARTY_PAYOUT_REASON);
+    expect(result.nonMatching[0]!.reason).toContain("SEP-6");
+    expect(result.nonMatching[0]!.reason).toContain("third_party_payout");
+  });
+
+  it("keeps a SEP-6 corridor only when third_party_payout is true", () => {
+    const result = candidates(usdInUs, [sep6("confirmed", true)]);
+    expect(ids(result.matching)).toEqual(["confirmed"]);
+    expect(result.nonMatching).toEqual([]);
+  });
+
+  it("drops an explicit third_party_payout: false too", () => {
+    const result = candidates(usdInUs, [sep6("refused", false)]);
+    expect(result.matching).toEqual([]);
+    expect(droppedIds(result)).toEqual(["refused"]);
+    expect(result.nonMatching[0]!.reason).toBe(SEP6_THIRD_PARTY_PAYOUT_REASON);
+  });
+
+  it("leaves SEP-31 corridors, which carry no flag, unaffected", () => {
+    const all = realCorridors();
+    const sep31 = all.filter((c) => c.dest.protocol === "sep31");
+    expect(sep31.length).toBeGreaterThan(0);
+
+    const result = candidates(usdInUs, sep31);
+    for (const dropped of result.nonMatching) {
+      expect(dropped.reason).not.toContain("third_party_payout");
+    }
+    expect(ids(result.matching)).toEqual(["mock", "reference-testnet"]);
+  });
+
+  it("preserves order and reports every dropped SEP-6 corridor", () => {
+    const mock = find(realCorridors(), "mock");
+    const result = candidates(usdInUs, [sep6("a"), mock, sep6("c", true), sep6("d", false)]);
+
+    expect(ids(result.matching)).toEqual(["mock", "c"]);
+    expect(droppedIds(result)).toEqual(["a", "d"]);
+  });
+
+  it("lists the payout reason next to a destination mismatch", () => {
+    const result = candidates({ destAsset: "iso4217:NGN", destCountry: "NG" }, [sep6("a")]);
+    const reason = result.nonMatching[0]!.reason;
+    expect(reason).toContain("dest.asset");
+    expect(reason).toContain("dest.country");
+    expect(reason).toContain(SEP6_THIRD_PARTY_PAYOUT_REASON);
   });
 });
 

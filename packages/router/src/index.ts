@@ -154,7 +154,7 @@ export {
 } from "./registry-resolver";
 
 // Planner step 1: corridors whose declared destination matches the request.
-export { candidates } from "./candidates";
+export { candidates, SEP6_THIRD_PARTY_PAYOUT_REASON } from "./candidates";
 export type { CandidateRequest, CandidatesResult, NonMatchingCorridor } from "./candidates";
 
 // Planner step: keep only candidates the registry can vouch for, with reasons
@@ -180,11 +180,13 @@ export {
 export { createAdapterRegistry } from "./adapters";
 export type { AdapterFactory, AdapterRegistry } from "./adapters";
 
-// SEP-10 lane check: whether a receiving anchor's login accepts our own key.
+// Lane check v1: whether a receiving anchor's SEP-10 login and authorised
+// GET /sep31/info accept our own key.
 export {
   checkLane,
   type LaneCheckOptions,
   type LaneCheckResult,
+  type LaneCheckStep,
   type LaneStatus,
 } from "./lane-check";
 export { appendOptionReason, formatOptionReason, summarizeOptionReasons } from "./reasons";
@@ -284,7 +286,6 @@ export type {
   PinnedRunRecord,
   PinnedRunStore,
 } from "./pinned-resolver";
-
 // RFC 0004 route-option score: run-history success rate, discounted by attestation age.
 export {
   ATTESTATION_PENALTY_LEDGERS,
@@ -304,3 +305,8 @@ export type {
 // then speed, then domain. Pure and deterministic.
 export { rank, cautiousRecipientAmount } from "./rank";
 export type { RankableOption, RankOptions } from "./rank";
+
+// Rate history: the minimum-data rule that decides whether a pair at an
+// anchor may carry an `estimated` price at all (RFC 0004 §3).
+export { assessRateHistory } from "./rate-history";
+export type { EstimateAssessment, EstimateThresholds } from "./rate-history";
