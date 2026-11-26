@@ -18,6 +18,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
   are planned (wallet trustline check #648).
 - `docs/README.md` indexes the guides and RFCs. The web docs site has a route planner
   page, and `docs/route-resolver.md` and `README.md` link to the guide.
+
 ### Added — `POST /routes`: plan and rank routes before paying ([#617](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/617))
 
 - `@corridor/service` serves `POST /routes`. It takes RFC 0004's `RouteRequest` (`sourceAmount`,
