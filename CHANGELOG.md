@@ -7,6 +7,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
+### Added — Fall back to the next route before funds move ([#626](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/626))
+
+- When the primary route fails before any funds move (a refused quote, a KYC rejection, or a
+  transaction that cannot be opened), the engine tries the resolver's alternates as linked runs
+  under `<key>:alt1`, `<key>:alt2`, up to `maxAlternates` (default 2; `0` turns fallback off).
+  Once a run reaches `settling`, no other route is tried.
+- A resumed run whose route now resolves to a different receiving domain than the one stored on
+  the run (#734) is refused with `ROUTE_PINNED`.
+- The router's resolver option type is `RouteCandidate`, so it does not clash with the planner's
+  RFC 0004 `RouteOption`.
+
 ### Added — router ranking function ([#611](https://github.com/corridor-in-a-box/corridor-in-a-box/issues/611))
 
 - `rank(options, { estimateMarginBps })` in `@corridor/router` orders route options per RFC 0004
