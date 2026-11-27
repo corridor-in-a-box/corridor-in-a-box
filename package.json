@@ -86,7 +86,7 @@
     "@vitest/coverage-v8": "2.1.9",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
-    "eslint": "^10.13.0",
+    "eslint": "^10.15.0",
     "eslint-config-prettier": "^10.1.8",
     "lefthook": "2.2.2",
     "parse-prometheus-text-format": "^1.1.1",
