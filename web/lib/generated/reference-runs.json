@@ -1,3 +1,25 @@
 {
-  "runs": []
+  "runs": [
+    {
+      "runId": 46026382570,
+      "date": "2026-11-27T15:36:31.000Z",
+      "outcome": "success",
+      "durationSeconds": 90,
+      "trail": [
+        "created",
+        "quoted",
+        "compliant",
+        "opened",
+        "verifying",
+        "settling",
+        "settled",
+        "reconciled",
+        "completed"
+      ],
+      "txHashes": [
+        "4c7e7cce77ef6ae65e307166a982039b95373388eb67bc7b4c59727fe8c5b8f5"
+      ],
+      "runUrl": "https://github.com/corridor-in-a-box/corridor-in-a-box/actions/runs/46026382570"
+    }
+  ]
 }
